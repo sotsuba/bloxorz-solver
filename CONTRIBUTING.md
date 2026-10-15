@@ -11,6 +11,10 @@
 7. Once everything looks good, ping the code owner and let them stare at your code. That's it.
 
 ## Must read resources
-
+**About commit conventions:**
 - [Commit message conventions (just for fun, we squash and merge anyway)](https://www.conventionalcommits.org/en/v1.0.0/)
+- [Why Write Small CLs?](https://google.github.io/eng-practices/review/developer/small-cls.html)
+- [Committing in two phases](https://github.com/git-guides/git-commit#committing-in-two-phases)
+
+**About pull request conventions:**
 - [Pull request conventions](https://cadenceworkflow.io/community/how-to-contribute/pull-request-conventions)
