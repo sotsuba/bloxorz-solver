@@ -12,5 +12,5 @@
 
 ## Must read resources
 
-- [Commit message conventions](https://www.conventionalcommits.org/en/v1.0.0/)
+- [Commit message conventions (just for fun, we squash and merge anyway)](https://www.conventionalcommits.org/en/v1.0.0/)
 - [Pull request conventions](https://cadenceworkflow.io/community/how-to-contribute/pull-request-conventions)
