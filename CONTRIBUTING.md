@@ -1,5 +1,9 @@
 # Contributing
 
+## Bad commit vs Good commit?
+- Bad commit: is one that is too large, mixes unrelated changes, or is difficult to review.
+- Good commit: small, focused, and easy to understand. Each commit should represent one logical change.
+
 ## Common workflows
 
 1. Pull the latest code from `main`.
