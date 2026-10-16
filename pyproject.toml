@@ -1,0 +1,19 @@
+[project]
+name = "bloxorz-solver"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Tien-Son Nguyen", email = "ntson.1303@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pygame>=2.6.1",
+]
+
+[project.scripts]
+bloxorz-solver = "bloxorz_solver:main"
+
+[build-system]
+requires = ["uv_build>=0.12.22,<0.13.0"]
+build-backend = "uv_build"
