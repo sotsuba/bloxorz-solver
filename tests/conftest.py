@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from bloxorz.domain.models import Level, Position
-from bloxorz.domain.validation import validate_level
+from bloxorz_solver.game.state import Level, Position
+from bloxorz_solver.game.validation import validate_level
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ["SDL_VIDEODRIVER"] = "dummy"
+os.environ["SDL_AUDIODRIVER"] = "dummy"
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 
 @pytest.fixture(scope="session")

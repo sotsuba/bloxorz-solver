@@ -3,7 +3,14 @@
 from dataclasses import dataclass, replace
 from math import cos, pi, sin
 
-from bloxorz.domain.models import Action, BlockState, NormalBlock, Orientation, Position, SplitBlock
+from bloxorz_solver.game.state import (
+    Action,
+    BlockState,
+    NormalBlock,
+    Orientation,
+    Position,
+    SplitBlock,
+)
 
 Point3 = tuple[float, float, float]
 BLOCK_INSET = 0.04

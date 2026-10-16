@@ -4,7 +4,7 @@ import json
 from importlib.resources import files
 from pathlib import Path
 
-from bloxorz.domain.models import (
+from bloxorz_solver.game.state import (
     Bridge,
     BridgeEffect,
     EffectMode,
@@ -13,7 +13,7 @@ from bloxorz.domain.models import (
     Switch,
     SwitchKind,
 )
-from bloxorz.domain.validation import validate_level
+from bloxorz_solver.game.validation import validate_level
 
 
 class LevelFormatError(ValueError):
@@ -31,7 +31,7 @@ def load_level(path: str | Path) -> Level:
 
 def builtin_levels() -> tuple[Level, ...]:
     """Read bundled stage resources even when the package is installed elsewhere."""
-    resources = files("bloxorz").joinpath("levels")
+    resources = files("bloxorz_solver").joinpath("levels")
     return tuple(
         parse_level(json.loads(path.read_text(encoding="utf-8")))
         for path in sorted(resources.iterdir(), key=lambda p: p.name)

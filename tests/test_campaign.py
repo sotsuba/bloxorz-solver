@@ -2,9 +2,9 @@
 
 import pytest
 
-from bloxorz.domain.engine import initial_state, occupied_cells, transition
-from bloxorz.domain.models import Action, EventType, Outcome, SplitBlock
-from bloxorz.infrastructure.level_loader import builtin_levels
+from bloxorz_solver.game.rules import initial_state, occupied_cells, transition
+from bloxorz_solver.game.state import Action, EventType, Outcome, SplitBlock
+from bloxorz_solver.levels.loader import builtin_levels
 
 ACTIONS = dict(U=Action.UP, D=Action.DOWN, L=Action.LEFT, R=Action.RIGHT, X=Action.SWAP_ACTIVE_CUBE)
 

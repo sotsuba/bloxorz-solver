@@ -1,14 +1,20 @@
 """Manual game lifecycle without any GUI dependency."""
 
 from dataclasses import dataclass, field
-from enum import StrEnum
 
-from bloxorz.domain.engine import initial_state, transition
-from bloxorz.domain.models import Action, GameState, Level, Outcome, TransitionResult
-from bloxorz.domain.validation import validate_level
+from bloxorz_solver.game.rules import initial_state, transition
+from bloxorz_solver.game.state import (
+    Action,
+    GameState,
+    Level,
+    Outcome,
+    StringEnum,
+    TransitionResult,
+)
+from bloxorz_solver.game.validation import validate_level
 
 
-class SessionStatus(StrEnum):
+class SessionStatus(StringEnum):
     PLAYING = "playing"
     WON = "won"
     LOST = "lost"
@@ -54,6 +60,8 @@ class GameSession:
             self.swap_count += 1
         else:
             self.roll_count += 1
-        if result.outcome in (Outcome.WON, Outcome.LOST):
-            self.status = SessionStatus(result.outcome.value)
+        if result.outcome is Outcome.WON:
+            self.status = SessionStatus.WON
+        elif result.outcome is Outcome.LOST:
+            self.status = SessionStatus.LOST
         return result

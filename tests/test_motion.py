@@ -4,9 +4,16 @@ from math import dist
 
 import pytest
 
-from bloxorz.domain.engine import transition
-from bloxorz.domain.models import Action, GameState, NormalBlock, Orientation, Position, SplitBlock
-from bloxorz.presentation.motion import (
+from bloxorz_solver.game.rules import transition
+from bloxorz_solver.game.state import (
+    Action,
+    GameState,
+    NormalBlock,
+    Orientation,
+    Position,
+    SplitBlock,
+)
+from bloxorz_solver.ui.motion import (
     BLOCK_INSET,
     block_meshes,
     bridge_vertices,

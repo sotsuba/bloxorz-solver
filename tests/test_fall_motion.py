@@ -4,8 +4,8 @@ from math import dist
 
 import pytest
 
-from bloxorz.domain.engine import supported_cells, transition
-from bloxorz.domain.models import (
+from bloxorz_solver.game.rules import supported_cells, transition
+from bloxorz_solver.game.state import (
     Action,
     Bridge,
     BridgeEffect,
@@ -19,7 +19,7 @@ from bloxorz.domain.models import (
     Switch,
     SwitchKind,
 )
-from bloxorz.presentation.motion import (
+from bloxorz_solver.ui.motion import (
     BLOCK_INSET,
     FACES,
     block_meshes,

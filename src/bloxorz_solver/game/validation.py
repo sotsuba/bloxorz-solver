@@ -1,6 +1,6 @@
 """Validate static level invariants before allowing a game session."""
 
-from bloxorz.domain.models import EffectMode, Level, Switch, SwitchKind
+from bloxorz_solver.game.state import BridgeEffect, EffectMode, Level, Switch, SwitchKind
 
 
 def validate_level(level: Level) -> None:
@@ -50,7 +50,7 @@ def _validate_switches(level: Level) -> None:
             raise ValueError(f"switch {switch.id}: overlapping switch position")
         occupied.add(pos)
         if switch.bridge_effect:
-            _validate_effect(level, switch)
+            _validate_effect(level, switch.id, switch.bridge_effect)
         elif switch.kind is not SwitchKind.SPLIT:
             raise ValueError(f"switch {switch.id}: bridge_effect is required")
         if switch.kind is SwitchKind.SPLIT:
@@ -59,17 +59,16 @@ def _validate_switches(level: Level) -> None:
             raise ValueError(f"switch {switch.id}: only split switches have spawn positions")
 
 
-def _validate_effect(level: Level, switch: Switch) -> None:
+def _validate_effect(level: Level, switch_id: str, effect: BridgeEffect) -> None:
     """Require real bridge targets and an explicit Boolean for set effects."""
-    effect = switch.bridge_effect
     if not effect.targets or len(set(effect.targets)) != len(effect.targets):
-        raise ValueError(f"switch {switch.id}: targets must be nonempty and unique")
+        raise ValueError(f"switch {switch_id}: targets must be nonempty and unique")
     if any(target not in level.bridge_indices for target in effect.targets):
-        raise ValueError(f"switch {switch.id}: unknown bridge target")
+        raise ValueError(f"switch {switch_id}: unknown bridge target")
     if effect.mode is EffectMode.SET and not isinstance(effect.open, bool):
-        raise ValueError(f"switch {switch.id}: set effect needs a Boolean open value")
+        raise ValueError(f"switch {switch_id}: set effect needs a Boolean open value")
     if effect.mode is EffectMode.TOGGLE and effect.open is not None:
-        raise ValueError(f"switch {switch.id}: toggle effect must not specify open")
+        raise ValueError(f"switch {switch_id}: toggle effect must not specify open")
 
 
 def _validate_spawns(level: Level, switch: Switch) -> None:

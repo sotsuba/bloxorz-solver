@@ -4,8 +4,14 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from bloxorz.domain.engine import initial_state, is_goal, legal_actions, occupied_cells, transition
-from bloxorz.domain.models import (
+from bloxorz_solver.game.rules import (
+    initial_state,
+    is_goal,
+    legal_actions,
+    occupied_cells,
+    transition,
+)
+from bloxorz_solver.game.state import (
     Action,
     Bridge,
     BridgeEffect,
@@ -299,3 +305,21 @@ def test_swap_of_complete_block_is_invalid(make_level):
     result = transition(level, state, Action.SWAP_ACTIVE_CUBE)
     assert result.outcome is Outcome.INVALID
     assert result.next_state == state
+
+
+@pytest.mark.parametrize("action", ["unknown", "swap", None])
+def test_invalid_action_does_not_crash_or_change_state(make_level, action):
+    level = make_level()
+    state = initial_state(level)
+    result = transition(level, state, action)
+    assert result.outcome is Outcome.INVALID
+    assert result.next_state == state
+    assert result.reason == "invalid_action"
+
+
+def test_lost_state_has_no_legal_actions(make_level):
+    # A roll from this unsupported state could reach floor again. Search must
+    # treat the loss as terminal rather than rescuing the fallen block.
+    level = make_level()
+    state = GameState(NormalBlock(-1, 4, Orientation.VERTICAL))
+    assert legal_actions(level, state) == ()

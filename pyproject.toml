@@ -1,33 +1,36 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "bloxorz-game"
+name = "bloxorz-solver"
 version = "0.1.0"
-description = "A playable desktop Bloxorz game with advanced tiles"
-requires-python = ">=3.11"
-dependencies = ["PySide6>=6.8,<7"]
-
-[project.optional-dependencies]
-dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+description = "Bloxorz puzzle game with a Pygame interface and reusable search contracts"
+readme = "README.md"
+authors = [
+    { name = "Tien-Son Nguyen", email = "ntson.1303@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pygame>=2.6.1",
+]
 
 [project.scripts]
-bloxorz = "bloxorz.presentation.main_window:main"
+bloxorz-solver = "bloxorz_solver:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[build-system]
+requires = ["uv_build>=0.12.22,<0.13.0"]
+build-backend = "uv_build"
 
-[tool.setuptools.package-data]
-bloxorz = ["levels/*.json"]
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.ruff]
+target-version = "py310"
 line-length = 100
-target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from bloxorz.infrastructure.level_loader import (
+from bloxorz_solver.levels.loader import (
     LevelFormatError,
     load_level,
     parse_level,

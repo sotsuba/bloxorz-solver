@@ -2,10 +2,17 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from functools import cached_property
 from types import MappingProxyType
 from typing import NamedTuple
+
+
+class StringEnum(str, Enum):
+    """String-valued enum compatible with Python 3.10."""
+
+    def __str__(self) -> str:
+        return self.value
 
 
 class Position(NamedTuple):
@@ -15,13 +22,13 @@ class Position(NamedTuple):
     col: int
 
 
-class Orientation(StrEnum):
+class Orientation(StringEnum):
     STANDING = "standing"
     HORIZONTAL = "horizontal"
     VERTICAL = "vertical"
 
 
-class Action(StrEnum):
+class Action(StringEnum):
     UP = "up"
     DOWN = "down"
     LEFT = "left"
@@ -29,25 +36,25 @@ class Action(StrEnum):
     SWAP_ACTIVE_CUBE = "swap"
 
 
-class SwitchKind(StrEnum):
+class SwitchKind(StringEnum):
     SOFT = "soft"
     HEAVY = "heavy"
     SPLIT = "split"
 
 
-class EffectMode(StrEnum):
+class EffectMode(StringEnum):
     TOGGLE = "toggle"
     SET = "set"
 
 
-class Outcome(StrEnum):
+class Outcome(StringEnum):
     MOVED = "moved"
     WON = "won"
     LOST = "lost"
     INVALID = "invalid"
 
 
-class EventType(StrEnum):
+class EventType(StringEnum):
     SWITCH_TRIGGERED = "switch_triggered"
     BRIDGE_OPENED = "bridge_opened"
     BRIDGE_CLOSED = "bridge_closed"

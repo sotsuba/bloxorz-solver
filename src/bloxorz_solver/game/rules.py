@@ -1,6 +1,8 @@
 """Pure, deterministic Bloxorz movement and mechanism rules."""
 
-from bloxorz.domain.models import (
+from collections.abc import Iterator
+
+from bloxorz_solver.game.state import (
     Action,
     BlockState,
     BridgeEffect,
@@ -19,27 +21,26 @@ from bloxorz.domain.models import (
     TransitionResult,
 )
 
-S, H, V = Orientation.STANDING, Orientation.HORIZONTAL, Orientation.VERTICAL
 ROLLS = (Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT)
 DIRECTIONS = {Action.UP: (-1, 0), Action.DOWN: (1, 0), Action.LEFT: (0, -1), Action.RIGHT: (0, 1)}
 ROLL_TABLE = {
-    S: {
-        Action.UP: (-2, 0, V),
-        Action.DOWN: (1, 0, V),
-        Action.LEFT: (0, -2, H),
-        Action.RIGHT: (0, 1, H),
+    Orientation.STANDING: {
+        Action.UP: (-2, 0, Orientation.VERTICAL),
+        Action.DOWN: (1, 0, Orientation.VERTICAL),
+        Action.LEFT: (0, -2, Orientation.HORIZONTAL),
+        Action.RIGHT: (0, 1, Orientation.HORIZONTAL),
     },
-    H: {
-        Action.UP: (-1, 0, H),
-        Action.DOWN: (1, 0, H),
-        Action.LEFT: (0, -1, S),
-        Action.RIGHT: (0, 2, S),
+    Orientation.HORIZONTAL: {
+        Action.UP: (-1, 0, Orientation.HORIZONTAL),
+        Action.DOWN: (1, 0, Orientation.HORIZONTAL),
+        Action.LEFT: (0, -1, Orientation.STANDING),
+        Action.RIGHT: (0, 2, Orientation.STANDING),
     },
-    V: {
-        Action.UP: (-1, 0, S),
-        Action.DOWN: (2, 0, S),
-        Action.LEFT: (0, -1, V),
-        Action.RIGHT: (0, 1, V),
+    Orientation.VERTICAL: {
+        Action.UP: (-1, 0, Orientation.STANDING),
+        Action.DOWN: (2, 0, Orientation.STANDING),
+        Action.LEFT: (0, -1, Orientation.VERTICAL),
+        Action.RIGHT: (0, 1, Orientation.VERTICAL),
     },
 }
 
@@ -55,9 +56,9 @@ def occupied_cells(block: BlockState) -> tuple[Position, ...]:
     if isinstance(block, SplitBlock):
         return block.cube_a, block.cube_b
     anchor = Position(block.row, block.col)
-    if block.orientation is H:
+    if block.orientation is Orientation.HORIZONTAL:
         return anchor, Position(block.row, block.col + 1)
-    if block.orientation is V:
+    if block.orientation is Orientation.VERTICAL:
         return anchor, Position(block.row + 1, block.col)
     return (anchor,)
 
@@ -67,7 +68,7 @@ def is_goal(level: Level, state: GameState) -> bool:
     block = state.block
     return (
         isinstance(block, NormalBlock)
-        and block.orientation is S
+        and block.orientation is Orientation.STANDING
         and (block.row, block.col) == level.goal
     )
 
@@ -77,20 +78,28 @@ def bridge_is_open(level: Level, state: GameState, bridge_id: str) -> bool:
     return bool(state.bridge_mask & (1 << level.bridge_indices[bridge_id]))
 
 
-def legal_actions(level: Level, state: GameState) -> tuple[Action, ...]:
-    """Exclude invalid and losing actions for future search adapters."""
+def safe_transitions(level: Level, state: GameState) -> Iterator[tuple[Action, TransitionResult]]:
+    """Yield playable edges once, shared by legal-action queries and solvers."""
+    if is_goal(level, state) or support_failure(level, state):
+        return
     actions = (*ROLLS, Action.SWAP_ACTIVE_CUBE) if isinstance(state.block, SplitBlock) else ROLLS
-    return tuple(
-        action
-        for action in actions
-        if transition(level, state, action).outcome in (Outcome.MOVED, Outcome.WON)
-    )
+    for action in actions:
+        result = transition(level, state, action)
+        if result.outcome in (Outcome.MOVED, Outcome.WON):
+            yield action, result
+
+
+def legal_actions(level: Level, state: GameState) -> tuple[Action, ...]:
+    """Return actions that keep the whole block supported or complete the level."""
+    return tuple(action for action, _ in safe_transitions(level, state))
 
 
 def transition(level: Level, state: GameState, action: Action) -> TransitionResult:
     """Apply one action without modifying inputs, including explicit fall outcomes."""
     if is_goal(level, state):
         return TransitionResult(state, Outcome.INVALID, reason="stage_finished")
+    if not isinstance(action, Action):
+        return TransitionResult(state, Outcome.INVALID, reason="invalid_action")
     block = _move_block(state.block, action)
     if block is None:
         return TransitionResult(state, Outcome.INVALID, reason="invalid_action")
@@ -138,7 +147,11 @@ def _cell_support_failure(level: Level, state: GameState, cell: Position) -> str
     tile = level.grid[cell.row][cell.col]
     if tile == "#" and bridge_id is None:
         return "unsupported"
-    if tile == "F" and isinstance(state.block, NormalBlock) and state.block.orientation is S:
+    if (
+        tile == "F"
+        and isinstance(state.block, NormalBlock)
+        and state.block.orientation is Orientation.STANDING
+    ):
         return "fragile"
     return ""
 
@@ -170,7 +183,7 @@ def _merge(block: BlockState) -> tuple[BlockState, tuple[GameEvent, ...]]:
     a, b = block.cube_a, block.cube_b
     if abs(a.row - b.row) + abs(a.col - b.col) != 1:
         return block, ()
-    orientation = H if a.row == b.row else V
+    orientation = Orientation.HORIZONTAL if a.row == b.row else Orientation.VERTICAL
     merged = NormalBlock(min(a.row, b.row), min(a.col, b.col), orientation)
     return merged, (GameEvent(EventType.BLOCK_MERGED),)
 
@@ -181,7 +194,7 @@ def _is_pressed(switch: Switch, block: BlockState) -> bool:
         return switch.position in occupied_cells(block)
     return (
         isinstance(block, NormalBlock)
-        and block.orientation is S
+        and block.orientation is Orientation.STANDING
         and (block.row, block.col) == switch.position
     )
 
@@ -191,7 +204,11 @@ def _activate_switches(
 ) -> tuple[GameState, tuple[GameEvent, ...]]:
     """Apply newly pressed switches once, in deterministic ID order."""
     pressed = [
-        s for s in level.switches if _is_pressed(s, block) and not _is_pressed(s, previous.block)
+        switch
+        for cell in occupied_cells(block)
+        if (switch := level.switch_at.get(cell)) is not None
+        and _is_pressed(switch, block)
+        and not _is_pressed(switch, previous.block)
     ]
     mask = previous.bridge_mask
     events = []

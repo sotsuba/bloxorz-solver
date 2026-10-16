@@ -1,9 +1,9 @@
 """Session outcomes, counters and complete restart behavior."""
 
-from bloxorz.application.game_session import GameSession, SessionStatus
-from bloxorz.domain.engine import initial_state
-from bloxorz.domain.models import Action, SplitBlock
-from bloxorz.infrastructure.level_loader import builtin_levels
+from bloxorz_solver.game.rules import initial_state
+from bloxorz_solver.game.session import GameSession, SessionStatus
+from bloxorz_solver.game.state import Action, SplitBlock
+from bloxorz_solver.levels.loader import builtin_levels
 
 
 def test_new_session_starts_at_initial_state(make_level):
