@@ -1,13 +1,15 @@
-from abc import ABC, abstractmethod 
-from dataclasses import dataclass 
-from typing import Hashable 
-from bloxorz_solver.solvers.contracts import SearchProblem
 import time
 import tracemalloc
+from abc import ABC, abstractmethod
+from collections.abc import Hashable
+from dataclasses import dataclass
 
-@dataclass 
+from bloxorz_solver.solvers.contracts import SearchProblem
+
+
+@dataclass
 class SearchResult:
-    """Stores the solution path and search performance metrics."""
+    """Stores search metrics; peak_memory is bytes in the active tracing session."""
 
     path: list[str] | None
     search_time: float
@@ -15,36 +17,43 @@ class SearchResult:
     expanded_nodes: int
     solution_length: int
 
-    @property 
+    @property
     def is_found(self) -> bool:
-        return self.path is not None 
+        return self.path is not None
+
 
 class BaseSolver(ABC):
     """Abstract base class for BFS, DFS, UCS, and A* solvers."""
 
     def __init__(self, problem: SearchProblem):
-        self.problem = problem 
+        self.problem = problem
 
     def solve(self, initial_state: Hashable) -> SearchResult:
-        """Run the search and collect time, memory, and node metrics."""
-        tracemalloc.start()
+        """Collect metrics, preserving tracing started by the caller.
+
+        With existing tracing, peak_memory includes that session's earlier peak.
+        """
+        owns_tracing = not tracemalloc.is_tracing()
+        if owns_tracing:
+            tracemalloc.start()
         start_time = time.perf_counter()
 
         try:
             path, expanded = self._search(initial_state)
-            elapsed = time.perf_counter() - start_time 
-            _, peak = tracemalloc.get_traced_memory() 
+            elapsed = time.perf_counter() - start_time
+            _, peak = tracemalloc.get_traced_memory()
         finally:
-            tracemalloc.stop()
+            if owns_tracing:
+                tracemalloc.stop()
 
         return SearchResult(
             path=path,
             search_time=elapsed,
             peak_memory=peak,
             expanded_nodes=expanded,
-            solution_length=len(path) if path is not None else 0
+            solution_length=len(path) if path is not None else 0,
         )
- 
+
     @abstractmethod
     def _search(self, initial_state: Hashable) -> tuple[list[str] | None, int]:
         """
@@ -53,7 +62,7 @@ class BaseSolver(ABC):
         Returns:
             A tuple of (solution path or None, number of expanded nodes).
         """
-        pass 
+        pass
 
     def is_goal(self, state: Hashable) -> bool:
         return self.problem.is_goal(state)
@@ -61,7 +70,7 @@ class BaseSolver(ABC):
     @staticmethod
     def reconstruct_path(parents: dict, goal_state: Hashable) -> list[str]:
         """Reconstruct the action sequence from parent references."""
-        path = [] 
+        path = []
         current = goal_state
 
         while current in parents:
@@ -70,4 +79,3 @@ class BaseSolver(ABC):
             current = previous
 
         return path[::-1]
-

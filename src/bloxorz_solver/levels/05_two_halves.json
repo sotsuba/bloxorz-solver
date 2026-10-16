@@ -1,0 +1,28 @@
+{
+  "id": "05_two_halves",
+  "name": "Two halves",
+  "description": "Split on the upper island. Guide both cubes around their narrow bends before rejoining in the larger room.",
+  "grid": [
+    "##############",
+    "#....#########",
+    "#S...#########",
+    "#....###....G#",
+    "######.......#",
+    "#......#.....#",
+    "#######......#",
+    "#####...#....#",
+    "##############"
+  ],
+  "bridges": [],
+  "switches": [
+    {
+      "id": "split",
+      "type": "split",
+      "position": [2, 4],
+      "spawn_positions": [
+        [5, 1],
+        [7, 5]
+      ]
+    }
+  ]
+}

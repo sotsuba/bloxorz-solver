@@ -1,0 +1,13 @@
+{
+  "id": "02_light_touch",
+  "name": "Light touch",
+  "description": "Cross the orange paths lying down. Use the lower platform to change direction before the final climb.",
+  "grid": [
+    "###########",
+    "#SFF.##.FFG",
+    "#....##...#",
+    "###F.##.###",
+    "####.FF.###",
+    "###########"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "01_first_steps",
+  "name": "First steps",
+  "description": "Roll the block into the goal. It must arrive standing upright.",
+  "grid": [
+    "#########",
+    "#.......#",
+    "#S.....G#",
+    "#.......#",
+    "#########"
+  ]
+}
