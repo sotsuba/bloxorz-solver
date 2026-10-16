@@ -1,0 +1,81 @@
+{
+  "id": "09_double_shift",
+  "name": "Double shift",
+  "description": "Two split stations lead to separate mazes. Rejoin to press the X switch, then split again to reach the last island.",
+  "grid": [
+    "####################",
+    "#....###############",
+    "#S...##########....#",
+    "#....##########....#",
+    "########.....##....#",
+    "#.FF..##.....##....#",
+    "#####F##.....#######",
+    "#####........#...###",
+    "########.....###..##",
+    "########....#...#.G#",
+    "#####...#####.#....#",
+    "##########.FF.#....#",
+    "####################"
+  ],
+  "bridges": [
+    {
+      "id": "cube_crossing",
+      "cells": [
+        [8, 7],
+        [9, 7]
+      ],
+      "initially_open": false
+    },
+    {
+      "id": "upper_crossing",
+      "cells": [
+        [4, 13],
+        [4, 14]
+      ],
+      "initially_open": false
+    }
+  ],
+  "switches": [
+    {
+      "id": "first_split",
+      "type": "split",
+      "position": [2, 4],
+      "spawn_positions": [
+        [5, 1],
+        [10, 5]
+      ]
+    },
+    {
+      "id": "cube_button",
+      "type": "soft",
+      "position": [5, 4],
+      "bridge_effect": {
+        "mode": "toggle",
+        "targets": [
+          "cube_crossing"
+        ]
+      }
+    },
+    {
+      "id": "upper_button",
+      "type": "heavy",
+      "position": [4, 11],
+      "bridge_effect": {
+        "mode": "set",
+        "targets": [
+          "upper_crossing"
+        ],
+        "open": true
+      }
+    },
+    {
+      "id": "second_split",
+      "type": "split",
+      "position": [3, 17],
+      "spawn_positions": [
+        [11, 10],
+        [7, 14]
+      ]
+    }
+  ]
+}

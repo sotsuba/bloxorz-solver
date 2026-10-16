@@ -1,0 +1,133 @@
+{
+  "id": "10_the_long_way_home",
+  "name": "The long way home",
+  "description": "Prepare the exit before the return bridge closes. Coordinate both pairs of cubes, use every switch type, and rejoin for the final crossing.",
+  "grid": [
+    "######################",
+    "#.....##....##########",
+    "#.....##....#####....#",
+    "#S....##....#####....#",
+    "#.....##....#####....#",
+    "############...##....#",
+    "#.FF...###.....#######",
+    "######F###.....#..####",
+    "######.........##..###",
+    "##########....#....##.",
+    "##########....#..F.##.",
+    "######....#####....##G",
+    "##########.FF......##.",
+    "######################"
+  ],
+  "bridges": [
+    {
+      "id": "entry",
+      "cells": [
+        [3, 6],
+        [3, 7]
+      ],
+      "initially_open": false
+    },
+    {
+      "id": "cube_crossing",
+      "cells": [
+        [9, 9],
+        [10, 9]
+      ],
+      "initially_open": false
+    },
+    {
+      "id": "upper_crossing",
+      "cells": [
+        [5, 15],
+        [5, 16]
+      ],
+      "initially_open": false
+    },
+    {
+      "id": "exit",
+      "cells": [
+        [11, 19],
+        [11, 20]
+      ],
+      "initially_open": false
+    }
+  ],
+  "switches": [
+    {
+      "id": "entry_button",
+      "type": "soft",
+      "position": [1, 2],
+      "bridge_effect": {
+        "mode": "toggle",
+        "targets": [
+          "entry"
+        ]
+      }
+    },
+    {
+      "id": "prepare_exit",
+      "type": "heavy",
+      "position": [1, 4],
+      "bridge_effect": {
+        "mode": "set",
+        "targets": [
+          "exit"
+        ],
+        "open": true
+      }
+    },
+    {
+      "id": "close_return",
+      "type": "soft",
+      "position": [3, 8],
+      "bridge_effect": {
+        "mode": "set",
+        "targets": [
+          "entry"
+        ],
+        "open": false
+      }
+    },
+    {
+      "id": "first_split",
+      "type": "split",
+      "position": [2, 10],
+      "spawn_positions": [
+        [6, 1],
+        [11, 6]
+      ]
+    },
+    {
+      "id": "cube_button",
+      "type": "soft",
+      "position": [6, 5],
+      "bridge_effect": {
+        "mode": "toggle",
+        "targets": [
+          "cube_crossing"
+        ]
+      }
+    },
+    {
+      "id": "upper_button",
+      "type": "heavy",
+      "position": [5, 13],
+      "bridge_effect": {
+        "mode": "set",
+        "targets": [
+          "upper_crossing"
+        ],
+        "open": true
+      }
+    },
+    {
+      "id": "second_split",
+      "type": "split",
+      "position": [3, 19],
+      "spawn_positions": [
+        [12, 10],
+        [7, 16]
+      ]
+    }
+  ]
+}

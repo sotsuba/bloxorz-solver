@@ -1,0 +1,95 @@
+{
+  "id": "08_point_of_no_return",
+  "name": "Point of no return",
+  "description": "Prepare the far exit before leaving the first island. The switch after the first crossing closes your way back permanently.",
+  "grid": [
+    "##################",
+    "#....##....#######",
+    "#....##....#######",
+    "#S...##....#######",
+    "#....##....#######",
+    "#######....#######",
+    "##############G..#",
+    "##############...#",
+    "#######....###...#",
+    "#######....###...#",
+    "#######....###...#",
+    "##################"
+  ],
+  "bridges": [
+    {
+      "id": "entry",
+      "cells": [
+        [3, 5],
+        [3, 6]
+      ],
+      "initially_open": false
+    },
+    {
+      "id": "descent",
+      "cells": [
+        [6, 9],
+        [7, 9]
+      ],
+      "initially_open": false
+    },
+    {
+      "id": "exit",
+      "cells": [
+        [9, 11],
+        [9, 12],
+        [9, 13]
+      ],
+      "initially_open": false
+    }
+  ],
+  "switches": [
+    {
+      "id": "entry_button",
+      "type": "soft",
+      "position": [1, 2],
+      "bridge_effect": {
+        "mode": "toggle",
+        "targets": [
+          "entry"
+        ]
+      }
+    },
+    {
+      "id": "prepare_exit",
+      "type": "heavy",
+      "position": [1, 4],
+      "bridge_effect": {
+        "mode": "set",
+        "targets": [
+          "exit"
+        ],
+        "open": true
+      }
+    },
+    {
+      "id": "close_return",
+      "type": "soft",
+      "position": [3, 7],
+      "bridge_effect": {
+        "mode": "set",
+        "targets": [
+          "entry"
+        ],
+        "open": false
+      }
+    },
+    {
+      "id": "descent_button",
+      "type": "heavy",
+      "position": [1, 9],
+      "bridge_effect": {
+        "mode": "set",
+        "targets": [
+          "descent"
+        ],
+        "open": true
+      }
+    }
+  ]
+}

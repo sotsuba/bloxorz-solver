@@ -1,0 +1,49 @@
+{
+  "id": "06_bridge_builders",
+  "name": "Bridge builders",
+  "description": "Cube A must open the crossing for cube B. Cross orange tiles separately, then bring both cubes into the far room.",
+  "grid": [
+    "################",
+    "#....###########",
+    "#S...###########",
+    "#....#####....G#",
+    "#######........#",
+    "#.FF..F.##.....#",
+    "##########.....#",
+    "#########......#",
+    "#####...###....#",
+    "################"
+  ],
+  "bridges": [
+    {
+      "id": "crossing",
+      "cells": [
+        [8, 8],
+        [8, 9]
+      ],
+      "initially_open": false
+    }
+  ],
+  "switches": [
+    {
+      "id": "split",
+      "type": "split",
+      "position": [2, 4],
+      "spawn_positions": [
+        [5, 1],
+        [8, 5]
+      ]
+    },
+    {
+      "id": "soft",
+      "type": "soft",
+      "position": [5, 5],
+      "bridge_effect": {
+        "mode": "toggle",
+        "targets": [
+          "crossing"
+        ]
+      }
+    }
+  ]
+}
