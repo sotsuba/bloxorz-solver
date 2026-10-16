@@ -7,6 +7,8 @@ import tracemalloc
 
 @dataclass 
 class SearchResult:
+    """Stores the solution path and search performance metrics."""
+
     path: list[str] | None
     search_time: float
     peak_memory: int
@@ -18,11 +20,13 @@ class SearchResult:
         return self.path is not None 
 
 class BaseSolver(ABC):
+    """Abstract base class for BFS, DFS, UCS, and A* solvers."""
 
     def __init__(self, problem: SearchProblem):
         self.problem = problem 
 
     def solve(self, initial_state: Hashable) -> SearchResult:
+        """Run the search and collect time, memory, and node metrics."""
         tracemalloc.start()
         start_time = time.perf_counter()
 
@@ -43,6 +47,12 @@ class BaseSolver(ABC):
  
     @abstractmethod
     def _search(self, initial_state: Hashable) -> tuple[list[str] | None, int]:
+        """
+        Search for a path from the initial state to the goal.
+
+        Returns:
+            A tuple of (solution path or None, number of expanded nodes).
+        """
         pass 
 
     def is_goal(self, state: Hashable) -> bool:
@@ -50,6 +60,7 @@ class BaseSolver(ABC):
 
     @staticmethod
     def reconstruct_path(parents: dict, goal_state: Hashable) -> list[str]:
+        """Reconstruct the action sequence from parent references."""
         path = [] 
         current = goal_state
 
