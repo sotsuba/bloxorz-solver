@@ -6,25 +6,32 @@ from dataclasses import dataclass
 import pygame
 
 from bloxorz_solver.game.session import GameSession
-from bloxorz_solver.game.state import Level, SplitBlock
+from bloxorz_solver.game.state import Level
 from bloxorz_solver.ui.board import Board
 
 CANVAS_SIZE = (1160, 800)
-BOARD_SIZE = (800, 540)
+BOARD_SIZE = (800, 620)
 
 
 BUTTON_LAYOUT = {
-    "previous": ((860, 105, 46, 38), "<"),
-    "following": ((1090, 105, 46, 38), ">"),
-    "new_game": ((860, 190, 276, 40), "New game / Enter"),
-    "open": ((860, 240, 276, 36), "Open level / O"),
-    "swap": ((860, 505, 276, 40), "Switch cube / Space"),
-    "restart": ((860, 715, 132, 40), "Restart / R"),
-    "next": ((1004, 715, 132, 40), "Next / N"),
-    "up": ((954, 410, 86, 36), "Up"),
-    "left": ((860, 456, 86, 36), "Left"),
-    "down": ((954, 456, 86, 36), "Down"),
-    "right": ((1048, 456, 86, 36), "Right"),
+    "previous": ((860, 30, 46, 38), "<"),
+    "following": ((1090, 30, 46, 38), ">"),
+    "new_game": ((860, 140, 276, 40), "New game / Enter"),
+    "open": ((860, 192, 276, 36), "Open level / O"),
+    "mode": ((860, 296, 276, 40), "Manual  v"),
+    "solve": ((860, 348, 276, 40), "Solve"),
+    "swap": ((860, 550, 276, 40), "Switch cube / Space"),
+    "restart": ((860, 630, 132, 40), "Restart / R"),
+    "next": ((1004, 630, 132, 40), "Next / N"),
+    "up": ((954, 456, 86, 36), "Up"),
+    "left": ((860, 502, 86, 36), "Left"),
+    "down": ((954, 502, 86, 36), "Down"),
+    "right": ((1048, 502, 86, 36), "Right"),
+    "mode_manual": ((860, 338, 276, 36), "Manual"),
+    "mode_bfs": ((860, 374, 276, 36), "BFS"),
+    "mode_dfs": ((860, 410, 276, 36), "DFS"),
+    "mode_ucs": ((860, 446, 276, 36), "UCS"),
+    "mode_astar": ((860, 482, 276, 36), "A*"),
 }
 
 
@@ -34,6 +41,7 @@ class Button:
     label: str
     callback: Callable[[], None]
     enabled: bool = True
+    visible: bool = True
 
 
 def create_buttons(callbacks: Mapping[str, Callable[[], None]]) -> dict[str, Button]:
@@ -50,7 +58,7 @@ class GameView:
     def __init__(self):
         self.canvas = pygame.Surface(CANVAS_SIZE)
         self.board_surface = pygame.Surface(BOARD_SIZE)
-        self.fonts = {size: pygame.font.Font(None, size) for size in (20, 23, 26, 32, 46)}
+        self.fonts = {size: pygame.font.Font(None, size) for size in (20, 23, 32, 64)}
 
     def _text(self, text, pos, size=23, color="#E4EDF3"):
         self.canvas.blit(self.fonts[size].render(text, True, color), pos)
@@ -102,21 +110,19 @@ class GameView:
         screen: pygame.Surface,
         *,
         session: GameSession,
-        active_index: int,
         selected_level: Level,
         selected_index: int,
         level_count: int,
         board: Board,
         buttons: Sequence[Button],
-        status: tuple[str, str],
         path_input: str | None,
         error: str,
     ) -> None:
         self.canvas.fill("#172D42")
         pygame.draw.rect(self.canvas, "#F2F6F8", (836, 0, 324, 800))
-        self._draw_header(session, active_index, board.animation.is_animating)
+        self._draw_header(session)
         board.draw(self.board_surface)
-        self.canvas.blit(self.board_surface, (18, 182))
+        self.canvas.blit(self.board_surface, (18, 102))
         self._text(
             "Orange: fragile    Teal: bridge    Circle: soft    X: heavy    Purple: split",
             (30, 736),
@@ -124,12 +130,12 @@ class GameView:
             "#B9CEDA",
         )
         self._text(
-            "Arrows / WASD to roll    Space to switch cubes    R to restart",
+            "Arrows / WASD to roll    Space to switch cubes",
             (30, 768),
             20,
             "#A8BFCE",
         )
-        self._draw_sidebar(selected_level, selected_index, level_count, status)
+        self._draw_sidebar(selected_level, selected_index, level_count, error)
         self._draw_buttons(buttons)
         if path_input is not None:
             self._draw_path_dialog(path_input, error)
@@ -138,43 +144,34 @@ class GameView:
         screen.blit(pygame.transform.smoothscale(self.canvas, viewport.size), viewport)
         pygame.display.flip()
 
-    def _draw_header(self, session: GameSession, active_index: int, is_animating: bool) -> None:
-        self._text("Bloxorz", (28, 24), 46)
-        self._text("A block-rolling puzzle", (30, 70), 23, "#A8BFCE")
-        self._text("MANUAL PLAY", (636, 44), 20, "#B9E0DE")
-        self._text(f"{active_index + 1:02d} / {session.level.name}", (30, 116), 26)
-        block = session.state.block
-        block_text = (
-            f"Cube {'AB'[block.active_cube]} active"
-            if isinstance(block, SplitBlock)
-            else block.orientation.value.title()
-        )
-        self._text("Moving..." if is_animating else block_text, (30, 150), 20, "#A8BFCE")
-        self._text(
-            f"{session.roll_count} rolls   {session.swap_count} swaps", (610, 126), 23, "#F0C78C"
-        )
+    def _draw_header(self, session: GameSession) -> None:
+        """Align the title and counters on the same vertical center."""
+        title = self.fonts[64].render("Bloxorz", True, "#E4EDF3")
+        title_rect = title.get_rect(topleft=(28, 24))
+        self.canvas.blit(title, title_rect)
+        counters = f"{session.roll_count} rolls   {session.swap_count} swaps"
+        metrics = self.fonts[23].render(counters, True, "#F0C78C")
+        self.canvas.blit(metrics, metrics.get_rect(midright=(818, title_rect.centery)))
 
     def _draw_sidebar(
         self,
         selected_level: Level,
         selected_index: int,
         level_count: int,
-        status: tuple[str, str],
+        error: str,
     ) -> None:
-        self._text("Your next move", (860, 30), 32, "#21374B")
-        self._text(f"Stage {selected_index + 1:02d} / {level_count:02d}", (935, 115), 23, "#21374B")
-        self._wrap(selected_level.name, pygame.Rect(860, 154, 276, 34), color="#21374B")
-        self._wrap(selected_level.description, pygame.Rect(860, 289, 276, 96), size=20)
-        self._text("Move the block", (860, 383), 23, "#21374B")
-        self._text("Bright outline marks the active cube.", (860, 554), 20, "#627B8B")
-        pygame.draw.rect(self.canvas, "#E0EBF0", (850, 594, 296, 106), border_radius=6)
-        heading, body = status
-        self._text(heading, (864, 606), 26, "#21374B")
-        self._wrap(body, pygame.Rect(864, 635, 268, 60), size=20)
-        self._text("Drop a JSON file here to load a level.", (860, 772), 20, "#627B8B")
+        """Group level selection, movement, and session controls in the sidebar."""
+        self._text(f"Stage {selected_index + 1:02d} / {level_count:02d}", (935, 41), 23, "#21374B")
+        self._wrap(selected_level.name, pygame.Rect(860, 88, 276, 36), color="#21374B")
+        self._text("Play mode", (860, 268), 23, "#21374B")
+        self._text("Move the block", (860, 428), 23, "#21374B")
+        self._text("Drop a JSON file here to load a level.", (860, 694), 20, "#627B8B")
+        self._wrap(error, pygame.Rect(860, 724, 276, 64), size=20, color="#A34F38")
 
     def _draw_buttons(self, buttons: Sequence[Button]) -> None:
         for button in buttons:
+            if not button.visible:
+                continue
             pygame.draw.rect(
                 self.canvas,
                 "#DCE8ED" if button.enabled else "#E8EEF1",
