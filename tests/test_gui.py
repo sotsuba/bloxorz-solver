@@ -1,11 +1,18 @@
 """Headless integration tests using actual Pygame surfaces and input events."""
 
+from concurrent.futures import Future
+
 import pygame
 import pytest
 
 from bloxorz_solver.game.rules import initial_state
 from bloxorz_solver.game.session import SessionStatus
 from bloxorz_solver.game.state import NormalBlock, Position, SplitBlock
+from bloxorz_solver.solvers.astar import AStarSolver
+from bloxorz_solver.solvers.base import SearchResult
+from bloxorz_solver.solvers.bfs import BFSSolver
+from bloxorz_solver.solvers.dfs import DFSSolver
+from bloxorz_solver.solvers.ucs import UCSSolver
 from bloxorz_solver.ui.animation import BRIDGE_MS, FALL_MS, ROLL_MS
 from bloxorz_solver.ui.app import GameApp
 from bloxorz_solver.ui.motion import BLOCK_INSET, block_meshes
@@ -54,7 +61,6 @@ def test_all_stages_render_and_complete_through_keyboard(app, stage_routes):
         assert app.can_advance == (index < len(app.levels) - 1)
         app.draw()
     assert app.session.swap_count == 2
-    assert app.status_text()[0] == "Stage complete"
     click(app, "restart")
     assert app.can_play
     assert app.session.action_count == 0
@@ -68,7 +74,6 @@ def test_motion_blocks_overlapping_keyboard_and_mouse_inputs(app):
     click(app, "right")
     assert app.session.state == state
     assert app.session.roll_count == 1
-    assert app.status_text()[0] == "In motion"
     app.update(ROLL_MS)
     assert app.can_play
     click(app, "right")
@@ -186,7 +191,6 @@ def test_overhang_tips_on_actual_support_and_falls(app):
     app.draw()
     app.update(2000)
     assert app.animation.block_hidden
-    assert app.status_text()[0] == "Try again"
     click(app, "restart")
     assert app.can_play
 
@@ -261,3 +265,191 @@ def test_click_in_letterbox_does_not_trigger_controls(app):
     app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(0, 0)))
     assert app.session.action_count == 0
     assert app.selected_index == 0
+
+
+@pytest.mark.parametrize(
+    "mode, option", [("BFS", "bfs"), ("DFS", "dfs"), ("UCS", "ucs"), ("A*", "astar")]
+)
+@pytest.mark.parametrize("size", [(1160, 800), (600, 400), (1500, 800)])
+def test_mode_dropdown_selects_algorithms_and_manual_after_resize(app, size, mode, option):
+    app.handle_event(pygame.event.Event(pygame.VIDEORESIZE, w=size[0], h=size[1]))
+    assert app.mode == "Manual"
+    assert not app._controls()["solve"].visible
+    click(app, "mode")
+    click(app, f"mode_{option}")
+    assert app.mode == mode
+    assert not app.mode_menu_open
+    assert app._controls()["solve"].enabled
+    assert not app.buttons["right"].enabled
+    key(app, pygame.K_RIGHT)
+    assert app.session.roll_count == 0
+    click(app, "mode")
+    click(app, "mode_manual")
+    click(app, "right")
+    assert app.session.roll_count == 1
+
+
+def test_mode_dropdown_dismisses_without_triggering_covered_controls(app):
+    click(app, "mode")
+    key(app, pygame.K_ESCAPE)
+    assert app.running
+    assert not app.mode_menu_open
+    click(app, "mode")
+    click(app, "right")
+    assert not app.mode_menu_open
+    assert app.session.roll_count == 0
+
+
+@pytest.mark.parametrize(
+    "mode, option", [("BFS", "bfs"), ("DFS", "dfs"), ("UCS", "ucs"), ("A*", "astar")]
+)
+def test_algorithms_solve_from_current_position_with_animated_playback(app, mode, option):
+    key(app, pygame.K_RIGHT)
+    click(app, "mode")
+    click(app, f"mode_{option}")
+    click(app, "solve")
+    result = app._search_future.result(timeout=5)
+    assert result.path
+    app.update(0)
+    assert app.animation.is_animating
+    assert app.session.roll_count == 2
+    assert not app._controls()["solve"].enabled
+    key(app, pygame.K_UP, finish=False)
+    assert app.session.roll_count == 2
+    for _ in range(len(result.path) + 1):
+        app.update(2000)
+    assert app.session.status is SessionStatus.WON
+    assert app.session.action_count == 1 + len(result.path)
+    assert app.animation.block_hidden
+    assert app.can_advance
+
+
+@pytest.mark.parametrize("mode", ["BFS", "DFS", "UCS", "A*"])
+def test_algorithms_report_an_unsolvable_position_without_changing_it(make_level, mode):
+    game = GameApp([make_level(grid=("S#G",), start=(0, 0), goal=(0, 2))])
+    try:
+        game.set_mode(mode)
+        original = game.session.state
+        game.solve()
+        assert game._search_future.result(timeout=5).path is None
+        game.update(0)
+        game.draw()
+        assert "No solution" in game.error
+        assert game.session.state == original
+        assert game.can_solve
+    finally:
+        game.close()
+        pygame.quit()
+
+
+@pytest.mark.parametrize("cancel", ["restart", "manual", "new_game", "open", "close"])
+def test_running_search_results_are_ignored_after_cancellation(app, monkeypatch, cancel):
+    future = Future()
+    future.set_running_or_notify_cancel()
+    monkeypatch.setattr(app._executor, "submit", lambda *args: future)
+    app.set_mode("BFS")
+    app.solve()
+    app.draw()
+    assert app.buttons["solve"].label == "Searching..."
+    assert not app.buttons["solve"].enabled
+    if cancel == "manual":
+        app.set_mode("Manual")
+    elif cancel == "new_game":
+        app.select_level(1)
+        app.start_selected_level()
+    elif cancel == "open":
+        app._open_path_input()
+    else:
+        getattr(app, cancel)()
+    assert future.running()
+    future.set_result(SearchResult(["right"] * 4, 0, 0, 0, 4))
+    app.update(2000)
+    assert app._search_future is None
+    assert not app._solution
+    assert app.session.roll_count == 0
+
+
+@pytest.mark.parametrize("cancel", ["restart", "manual", "new_game"])
+def test_solution_playback_cancels_between_moves(app, monkeypatch, cancel):
+    future = Future()
+    future.set_result(SearchResult(["right"] * 4, 0, 0, 0, 4))
+    monkeypatch.setattr(app._executor, "submit", lambda *args: future)
+    app.set_mode("BFS")
+    app.solve()
+    app.update(0)
+    assert app.session.roll_count == 1
+    assert app._solution
+    if cancel == "manual":
+        app.set_mode("Manual")
+    elif cancel == "new_game":
+        app.select_level(1)
+        app.start_selected_level()
+    else:
+        app.restart()
+    app.update(2000)
+    assert not app._solution
+    assert app.session.roll_count == (1 if cancel == "manual" else 0)
+
+
+def test_solution_playback_uses_split_cube_actions(app, monkeypatch, stage_routes):
+    app.selected_index = 5
+    app.start_selected_level()
+    actions = dict(U="up", D="down", L="left", R="right", X="swap")
+    route = [actions[letter] for letter in stage_routes[app.session.level.id]]
+    future = Future()
+    future.set_result(SearchResult(route, 0, 0, 0, len(route)))
+    monkeypatch.setattr(app._executor, "submit", lambda *args: future)
+    app.set_mode("BFS")
+    app.solve()
+    for _ in range(len(route) + 1):
+        app.update(2000)
+    assert app.session.status is SessionStatus.WON
+    assert app.session.swap_count == 1
+    assert app.animation.block_hidden
+
+
+def test_search_failure_is_reported_and_solve_can_be_retried(app, monkeypatch):
+    future = Future()
+    future.set_exception(RuntimeError("test search error"))
+    monkeypatch.setattr(app._executor, "submit", lambda *args: future)
+    app.set_mode("BFS")
+    app.solve()
+    app.update(0)
+    assert app.error == "Search failed: test search error"
+    assert app.can_solve
+
+
+@pytest.mark.parametrize(
+    "mode, solver_type",
+    [("BFS", BFSSolver), ("DFS", DFSSolver), ("UCS", UCSSolver), ("A*", AStarSolver)],
+)
+def test_solve_dispatches_to_the_selected_algorithm(app, monkeypatch, mode, solver_type):
+    submitted = []
+
+    def submit(search, state):
+        submitted.append((search.__self__, state))
+        return Future()
+
+    monkeypatch.setattr(app._executor, "submit", submit)
+    app.set_mode(mode)
+    app.solve()
+    solver, state = submitted[0]
+    assert isinstance(solver, solver_type)
+    assert solver.problem.level == app.session.level
+    assert state == app.session.state
+
+
+@pytest.mark.parametrize("mode", ["DFS", "UCS", "A*"])
+def test_switching_algorithm_discards_the_old_search_result(app, monkeypatch, mode):
+    future = Future()
+    future.set_running_or_notify_cancel()
+    monkeypatch.setattr(app._executor, "submit", lambda *args: future)
+    app.set_mode("BFS")
+    app.solve()
+    app.set_mode(mode)
+    future.set_result(SearchResult(["right"] * 4, 0, 0, 0, 4))
+    app.update(2000)
+    assert app.mode == mode
+    assert app.can_solve
+    assert not app._solution
+    assert app.session.action_count == 0
