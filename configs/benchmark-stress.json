@@ -1,0 +1,15 @@
+{
+  "seed": 20261021,
+  "per_cell": 4,
+  "attempts_per_slot": 20,
+  "max_states": 1000000,
+  "certification_seconds": 30,
+  "memory_mib": 1024,
+  "repeats": 3,
+  "search_seconds": 5,
+  "generation_seconds": 1080,
+  "measurement_seconds": 2280,
+  "figure_seconds": 240,
+  "total_seconds": 3600,
+  "exclude_corpus": "benchmarks/v1"
+}

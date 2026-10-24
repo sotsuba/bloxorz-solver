@@ -1,0 +1,10 @@
+{
+  "seed": 20261020,
+  "families": ["ordinary", "fragile", "switch", "split"],
+  "per_bin": 3,
+  "development_per_bin": 1,
+  "pilot_per_family": 12,
+  "max_states": 200000,
+  "attempts_per_map": 200,
+  "unsolvable_count": 2
+}
