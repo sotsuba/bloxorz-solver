@@ -1,0 +1,51 @@
+{
+  "id": "switch-5615355464568915818",
+  "name": "Màn switch 5615355464568915818",
+  "grid": [
+    "###############",
+    "#......##.....#",
+    "#......##.....#",
+    "#......##.....#",
+    "#......##....##",
+    "#......##.....#",
+    "#.S#...##.G...#",
+    "#......##.....#",
+    "##.....###....#",
+    "###############"
+  ],
+  "bridges": [
+    {
+      "id": "gate",
+      "cells": [
+        [
+          3,
+          7
+        ],
+        [
+          3,
+          8
+        ]
+      ],
+      "initially_open": false
+    }
+  ],
+  "switches": [
+    {
+      "id": "trigger",
+      "position": [
+        1,
+        1
+      ],
+      "bridge_effect": {
+        "mode": "toggle",
+        "targets": [
+          "gate"
+        ],
+        "open": null
+      },
+      "spawn_positions": [],
+      "type": "soft"
+    }
+  ],
+  "description": "Màn sinh tự động; xem manifest để biết chứng nhận."
+}

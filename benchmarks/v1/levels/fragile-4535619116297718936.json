@@ -1,0 +1,16 @@
+{
+  "id": "fragile-4535619116297718936",
+  "name": "Màn fragile 4535619116297718936",
+  "grid": [
+    "###############",
+    "#F.F..........#",
+    "#..F.....FF.FF#",
+    "#..F.#....#.F.#",
+    "#....#..F.#.S.#",
+    "#F.G..F...F..F#",
+    "###############"
+  ],
+  "bridges": [],
+  "switches": [],
+  "description": "Màn sinh tự động; xem manifest để biết chứng nhận."
+}
