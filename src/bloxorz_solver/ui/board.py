@@ -16,9 +16,18 @@ from bloxorz_solver.ui.motion import (
     cuboid,
     face_normal,
 )
+from bloxorz_solver.ui.rendering import (
+    COLUMN_RISE,
+    HEIGHT_SCALE,
+    ROW_DROP,
+    ROW_SKEW,
+    depth,
+    project,
+    shade,
+    visible,
+)
 
-ROW_SKEW, ROW_DROP, COLUMN_RISE, HEIGHT_SCALE = 0.48, 0.62, 0.18, 0.95
-FLOOR_DEPTH = 0.16
+FLOOR_DEPTH = 0.38
 
 
 class Board:
@@ -28,6 +37,13 @@ class Board:
         self.animation = animation
         self._view = (1.0, 0.0, 0.0)
         self._label_fonts: dict[int, pygame.font.Font] = {}
+        self._level = None
+        self._size = None
+        self._platform_key = None
+        self._platform = None
+        self._occlusion = None
+        self._block_layer = None
+        self._below_layer = None
 
     def _fit_view(self, rect: pygame.Rect) -> None:
         points = [
@@ -46,27 +62,36 @@ class Board:
         )
 
     def _project(self, col: float, row: float, height: float = 0) -> tuple[float, float]:
-        scale, left, top = self._view
-        return left + scale * (col + ROW_SKEW * row), top + scale * (
-            ROW_DROP * row - COLUMN_RISE * col - HEIGHT_SCALE * height
-        )
+        return project((col, row, height), self._view)
 
-    def _polygon(self, surface, points, color, *, outline="#586873"):
+    def _polygon(self, surface, points, color, *, outline=None):
         if len(points) < 3:
             return
         projected = [self._project(*p) for p in points]
         pygame.draw.polygon(surface, color, projected)
         if outline:
-            pygame.draw.aalines(surface, outline, True, projected)
+            pygame.draw.lines(surface, outline, True, projected,
+                              max(1, round(self._view[0] * 0.025)))
 
     def draw(self, surface: pygame.Surface) -> None:
-        surface.fill("#1B3449")
+        surface.fill((0, 0, 0, 0))
         if self.animation.level is None:
             return
-        self._fit_view(surface.get_rect())
-        platform = self._draw_platform(surface.get_size())
-        surface.blit(platform, (0, 0))
-        self._draw_block(surface, platform)
+        level, size = self.animation.level, surface.get_size()
+        if self._level is not level or self._size != size:
+            self._level, self._size = level, size
+            self._fit_view(surface.get_rect())
+            self._platform_key = None
+            self._block_layer = pygame.Surface(size, pygame.SRCALPHA)
+            self._below_layer = pygame.Surface(size, pygame.SRCALPHA)
+        # Block motion does not change the floor. Only bridge geometry does.
+        key = tuple(self.animation.bridge_openness(bridge.id) for bridge in level.bridges)
+        if self._platform_key != key:
+            self._platform = self._draw_platform(size)
+            self._platform_key = key
+            self._occlusion = None
+        surface.blit(self._platform, (0, 0))
+        self._draw_block(surface, self._platform)
 
     def _draw_platform(self, size: tuple[int, int]) -> pygame.Surface:
         platform = pygame.Surface(size, pygame.SRCALPHA)
@@ -104,7 +129,7 @@ class Board:
                     pygame.draw.aaline(surface, "#60A9A7", start, end)
 
     def _draw_tile(self, surface: pygame.Surface, pos: Position, tile: str) -> None:
-        color = (227, 161, 122) if tile == "F" else (216, 223, 226)
+        color = (232, 177, 112) if tile == "F" else (176, 201, 138)
         mesh = Mesh(
             cuboid(
                 pos.col + 0.012,
@@ -125,15 +150,18 @@ class Board:
         falling = self.animation.phase == "fall"
         # Draw below-floor fragments only outside the platform silhouette.
         if falling and self.animation.falling_outcome is Outcome.LOST:
-            below = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+            below = self._below_layer
+            below.fill((0, 0, 0, 0))
             for _, face, mesh, opacity in faces:
                 self._draw_block_face(below, face, clip_height(face, above=False), mesh, opacity)
-            erase = pygame.mask.from_surface(platform).to_surface(
-                setcolor=(0, 0, 0, 255), unsetcolor=(0, 0, 0, 0)
-            )
-            below.blit(erase, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)
+            if self._occlusion is None:
+                self._occlusion = pygame.mask.from_surface(platform).to_surface(
+                    setcolor=(0, 0, 0, 255), unsetcolor=(0, 0, 0, 0)
+                )
+            below.blit(self._occlusion, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)
             surface.blit(below, (0, 0))
-        block_layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        block_layer = self._block_layer
+        block_layer.fill((0, 0, 0, 0))
         for _, face, mesh, opacity in faces:
             self._draw_block_face(
                 block_layer, face, clip_height(face) if falling else face, mesh, opacity
@@ -142,9 +170,7 @@ class Board:
 
     def _draw_solid(self, surface, mesh, color):
         for _, face, _, _ in self._visible_faces(((mesh, 1.0),), inset=0):
-            normal = face_normal(face)
-            light = 1 if normal[2] > 0 else 0.68 if normal[1] > 0 else 0.5
-            self._polygon(surface, face, tuple(int(v * light) for v in color))
+            self._polygon(surface, face, shade(color, face), outline="#50604A")
 
     def _draw_marker(self, surface, pos, tile):
         def point(c, r):
@@ -209,16 +235,9 @@ class Board:
         normal = face_normal(original)
         magnitude = sqrt(sum(value * value for value in normal))
         unit = tuple(value / magnitude for value in normal)
-        light = max(0, min(1, unit[2] + 0.5 * unit[1] - 0.08 * unit[0]))
-        color = (
-            int(83 + 69 * light),
-            int(56 + 57 * light),
-            int(41 + 44 * light),
-            int(255 * opacity),
-        )
-        outline = (
-            (255, 225, 174, int(255 * opacity)) if mesh.active else (62, 57, 53, int(255 * opacity))
-        )
+        color = (*shade((251, 243, 224), original), int(255 * opacity))
+        edge_color = (158, 94, 30) if mesh.active else (91, 82, 65)
+        outline = (*edge_color, int(255 * opacity))
         self._polygon(surface, face, color, outline=outline)
         if mesh.label and unit[1] > 0.8:
             center = tuple(sum(p[i] for p in face) / len(face) for i in range(3))
@@ -226,21 +245,18 @@ class Board:
             if size not in self._label_fonts:
                 self._label_fonts[size] = pygame.font.Font(None, size)
             font = self._label_fonts[size]
-            label = font.render(mesh.label, True, "#FFF2D5")
+            label = font.render(mesh.label, True, "#463B30")
             label.set_alpha(int(255 * opacity))
             surface.blit(label, label.get_rect(center=self._project(*center)))
 
     def _visible_faces(self, meshes, *, inset: float = BLOCK_INSET):
         """Cull back faces and sort visible faces along the camera direction."""
-        camera = (-ROW_SKEW, 1, (ROW_DROP + COLUMN_RISE * ROW_SKEW) / HEIGHT_SCALE)
         faces = []
         for mesh, opacity in meshes:
             points = tuple((c, r, z - inset) for c, r, z in mesh.vertices)
             for indices in FACES:
                 face = tuple(points[index] for index in indices)
-                normal = face_normal(face)
-                if sum(normal[axis] * camera[axis] for axis in range(3)) <= 1e-8:
+                if not visible(face):
                     continue
-                depth = sum(sum(p[axis] * camera[axis] for axis in range(3)) for p in face) / 4
-                faces.append((depth, face, mesh, opacity))
+                faces.append((depth(face), face, mesh, opacity))
         return sorted(faces, key=lambda item: item[0])
