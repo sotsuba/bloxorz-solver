@@ -8,11 +8,17 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "pygame>=2.6.1",
+    "pygame-ce>=2.5.3,<3",
+    "pygame-gui>=0.6.14,<0.7",
 ]
+
+[project.optional-dependencies]
+benchmark = ["matplotlib>=3.8,<4"]
 
 [project.scripts]
 bloxorz-solver = "bloxorz_solver:main"
+bloxorz-generate = "bloxorz_solver.benchmark.generate:main"
+bloxorz-benchmark = "bloxorz_solver.benchmark.runner:main"
 
 [build-system]
 requires = ["uv_build>=0.12.22,<0.13.0"]
