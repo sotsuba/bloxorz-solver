@@ -1,5 +1,5 @@
 from collections import deque
-from typing import Hashable
+from collections.abc import Hashable
 
 from bloxorz_solver.solvers.base import BaseSolver
 
