@@ -3,26 +3,54 @@
 from collections import deque
 from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
+from time import perf_counter
 
 import pygame
+import pygame_gui
 
-from bloxorz_solver.game.rules import ROLLS
 from bloxorz_solver.game.session import GameSession, SessionStatus
-from bloxorz_solver.game.state import Action, Level, Outcome, SplitBlock
-from bloxorz_solver.levels.loader import LevelFormatError, builtin_levels, load_level
+from bloxorz_solver.game.state import Action, GameState, Level, Outcome
+from bloxorz_solver.levels.loader import builtin_levels
 from bloxorz_solver.solvers.astar import AStarSolver
 from bloxorz_solver.solvers.base import SearchResult
 from bloxorz_solver.solvers.bfs import BFSSolver
 from bloxorz_solver.solvers.dfs import DFSSolver
+from bloxorz_solver.solvers.heuristics import DEFAULT_HEURISTIC, HEURISTICS, create_heuristic
 from bloxorz_solver.solvers.problem import BloxorzProblem
 from bloxorz_solver.solvers.ucs import UCSSolver
 from bloxorz_solver.ui.animation import BoardAnimation
 from bloxorz_solver.ui.board import Board
-from bloxorz_solver.ui.view import CANVAS_SIZE, Button, GameView, create_buttons
+from bloxorz_solver.ui.view import (
+    CANVAS_SIZE,
+    MIN_WINDOW_SIZE,
+    PLAYBACK_SPEEDS,
+    Button,
+    GameView,
+    create_buttons,
+)
 
 SOLVERS = {"BFS": BFSSolver, "DFS": DFSSolver, "UCS": UCSSolver, "A*": AStarSolver}
+
+
+@dataclass
+class UISearchResult(SearchResult):
+    initialization_time: float = 0.0
+
+
+def solve_position(level: Level, state: GameState, mode: str, heuristic: str) -> UISearchResult:
+    """Build the problem and heuristic in the worker, using captured UI values."""
+    started = perf_counter()
+    problem = BloxorzProblem(level)
+    solver = (
+        AStarSolver(problem, create_heuristic(heuristic, problem))
+        if mode == "A*"
+        else SOLVERS[mode](problem)
+    )
+    initialization_time = perf_counter() - started
+    result = solver.solve(state)
+    return UISearchResult(**vars(result), initialization_time=initialization_time)
 
 
 KEY_ACTIONS = {
@@ -48,49 +76,42 @@ class GameApp:
         pygame.display.init()
         pygame.font.init()
         self.screen = pygame.display.set_mode(CANVAS_SIZE, pygame.RESIZABLE)
-        pygame.display.set_caption("Bloxorz Solver")
+        pygame.display.set_caption("Bloxorz")
         self.view = GameView()
         self.active_index = 0
-        self.selected_index = 0
         self.session = GameSession(self.levels[0])
         self.animation = BoardAnimation(self.session.level, self.session.state)
         self.board = Board(self.animation)
         self.running = True
-        self.path_input: str | None = None
         self.error = ""
-        self.mode = "Manual"
-        self.mode_menu_open = False
+        self.mode = "BFS"
+        self.heuristic_name = DEFAULT_HEURISTIC
+        self.autoplay = True
+        self.playback_speed = 1.0
+        self.solution_total = 0
+        self.solution_completed = 0
+        self._solution_animation = False
+        self.last_result: SearchResult | None = None
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._search_future: Future[SearchResult] | None = None
         self._solution: deque[Action] = deque()
         callbacks = {
-            "previous": partial(self.select_level, -1),
-            "following": partial(self.select_level, 1),
-            "new_game": self.start_selected_level,
-            "open": self._open_path_input,
-            "swap": partial(self.play, Action.SWAP_ACTIVE_CUBE),
             "restart": self.restart,
             "next": self.next_stage,
-            "mode": self.toggle_mode_menu,
-            "mode_manual": partial(self.set_mode, "Manual"),
-            "mode_bfs": partial(self.set_mode, "BFS"),
-            "mode_dfs": partial(self.set_mode, "DFS"),
-            "mode_ucs": partial(self.set_mode, "UCS"),
-            "mode_astar": partial(self.set_mode, "A*"),
             "solve": self.solve,
-            **{action.value: partial(self.play, action) for action in ROLLS},
+            "playback": self.toggle_playback,
+            "step": self.step_solution,
         }
         self.buttons = create_buttons(callbacks)
+        self.view.bind_buttons(self.buttons)
         self._key_commands = {
             pygame.K_r: self.restart,
             pygame.K_n: self.next_stage,
-            pygame.K_PAGEUP: callbacks["previous"],
-            pygame.K_PAGEDOWN: callbacks["following"],
-            pygame.K_RETURN: self.start_selected_level,
-            pygame.K_o: self._open_path_input,
-            pygame.K_ESCAPE: self.close,
+            pygame.K_PAGEUP: partial(self.select_level, -1),
+            pygame.K_PAGEDOWN: partial(self.select_level, 1),
         }
         self._display_session()
+        self._sync_view()
 
     @property
     def can_play(self) -> bool:
@@ -120,6 +141,7 @@ class GameApp:
         )
 
     def _display_session(self) -> None:
+        self._solution_animation = False
         self.animation.display(
             self.session.level,
             self.session.state,
@@ -146,17 +168,14 @@ class GameApp:
             self._display_session()
         self.error = ""
 
-    def toggle_mode_menu(self) -> None:
-        """Open or dismiss the play-mode choices."""
-        self.mode_menu_open = not self.mode_menu_open
-
     def set_mode(self, mode: str) -> None:
         """Switch control modes without discarding the current board position."""
+        if mode == self.mode:
+            return
         if mode != "Manual" and mode not in SOLVERS:
             raise ValueError(f"Unknown play mode: {mode}")
         self._cancel_solution()
         self.mode = mode
-        self.mode_menu_open = False
         self.error = ""
 
     def solve(self) -> None:
@@ -164,8 +183,43 @@ class GameApp:
         if not self.can_solve:
             return
         self.error = ""
-        solver = SOLVERS[self.mode](BloxorzProblem(self.session.level))
-        self._search_future = self._executor.submit(solver.solve, self.session.state)
+        self.last_result = None
+        self.solution_total = self.solution_completed = 0
+        self.autoplay = True
+        self._search_future = self._executor.submit(
+            solve_position, self.session.level, self.session.state, self.mode, self.heuristic_name
+        )
+
+    def set_heuristic(self, name: str) -> None:
+        if name not in HEURISTICS:
+            raise ValueError(f"Unknown built-in heuristic: {name}")
+        if name != self.heuristic_name:
+            self._cancel_solution()
+            self.heuristic_name = name
+            self.error = ""
+
+    def set_playback_speed(self, speed: float) -> None:
+        if speed not in PLAYBACK_SPEEDS:
+            raise ValueError(f"Unsupported playback speed: {speed}")
+        self.playback_speed = speed
+
+    def toggle_playback(self) -> None:
+        if self._solution:
+            self.autoplay = not self.autoplay
+
+    def _take_solution_step(self) -> None:
+        self._apply_action(self._solution.popleft())
+        self.solution_completed += 1
+        self._solution_animation = self.animation.is_animating
+
+    def step_solution(self) -> None:
+        if (
+            self._solution
+            and not self.autoplay
+            and not self.animation.is_animating
+            and not self.view.menu_open
+        ):
+            self._take_solution_step()
 
     def _cancel_solution(self) -> None:
         """Cancel queued work and discard results tied to the old mode or stage."""
@@ -173,6 +227,8 @@ class GameApp:
             self._search_future.cancel()
             self._search_future = None
         self._solution.clear()
+        self.solution_total = self.solution_completed = 0
+        self.last_result = None
 
     def _update_solution(self) -> None:
         """Collect a completed search and play one action after each animation."""
@@ -180,156 +236,167 @@ class GameApp:
             future, self._search_future = self._search_future, None
             try:
                 result = future.result()
+                self.last_result = result
                 if result.path is None:
-                    self.error = "No solution from this position. Restart to try again."
+                    self.error = "No solution from this position."
+                    self.view.show_notice("No solution found")
                 else:
                     self._solution.extend(Action(action) for action in result.path)
+                    self.solution_total = len(result.path)
             except Exception as exc:
                 self.error = f"Search failed: {exc}"
+                self.view.show_notice("Search failed")
         if (
             self._solution
+            and self.autoplay
             and not self.animation.is_animating
-            and not self.mode_menu_open
-            and self.path_input is None
+            and not self.view.menu_open
         ):
-            self._apply_action(self._solution.popleft())
+            self._take_solution_step()
 
     def restart(self) -> None:
+        self.view.clear_result()
+        self.view.show_notice("")
+        self.view.dismiss_menus()
         self._cancel_solution()
-        self.mode_menu_open = False
         self.session.restart()
         self._display_session()
         self.error = ""
 
     def select_level(self, offset: int) -> None:
-        self.selected_index = (self.selected_index + offset) % len(self.levels)
+        self.load_stage((self.active_index + offset) % len(self.levels))
 
-    def start_selected_level(self) -> None:
+    def load_stage(self, index: int) -> None:
+        self.view.clear_result()
+        self.view.show_notice("")
+        self.view.dismiss_menus()
         self._cancel_solution()
-        self.mode_menu_open = False
-        self.active_index = self.selected_index
-        self.session = GameSession(self.levels[self.selected_index])
+        self.active_index = index
+        self.session = GameSession(self.levels[index])
         self._display_session()
         self.error = ""
 
     def next_stage(self) -> None:
         if self.can_advance:
-            self.selected_index = self.active_index + 1
-            self.start_selected_level()
-
-    def open_level(self, path: str | Path) -> bool:
-        """Validate first, so a bad file cannot discard the active game."""
-        try:
-            level = load_level(Path(path).expanduser())
-        except LevelFormatError as exc:
-            self.error = str(exc)
-            return False
-        self.levels.append(level)
-        self.selected_index = len(self.levels) - 1
-        self.start_selected_level()
-        self._close_path_input()
-        return True
-
-    def _open_path_input(self) -> None:
-        self._cancel_solution()
-        self.mode_menu_open = False
-        self.path_input = ""
-        self.error = ""
-        pygame.key.start_text_input()
-
-    def _close_path_input(self) -> None:
-        self.path_input = None
-        pygame.key.stop_text_input()
+            self.load_stage(self.active_index + 1)
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        self._sync_view()
         if event.type == pygame.QUIT:
             self.close()
-        elif event.type == pygame.VIDEORESIZE:
-            self.screen = pygame.display.set_mode(
-                (max(320, event.w), max(240, event.h)), pygame.RESIZABLE
-            )
-        elif event.type == pygame.DROPFILE:
-            self.open_level(event.file)
-        elif self.path_input is not None:
-            self._handle_path_event(event)
-        elif event.type == pygame.KEYDOWN:
+            return
+        if event.type == pygame.VIDEORESIZE:
+            size = (max(MIN_WINDOW_SIZE[0], event.w), max(MIN_WINDOW_SIZE[1], event.h))
+            self.screen = pygame.display.set_mode(size, pygame.RESIZABLE)
+            self.view.resize(size)
+            return
+        if self.view.result_open:
+            self.view.process_event(event)
+            if event.type == pygame_gui.UI_BUTTON_PRESSED:
+                for name, widget in self.view.result_buttons.items():
+                    if event.ui_element is widget:
+                        self.buttons[name].callback()
+                        break
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    self.restart()
+                elif event.key == pygame.K_n:
+                    self.next_stage()
+            return
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            self.view.dismiss_menus()
+            return
+        # A click outside an expanded menu dismisses it without activating controls below.
+        if (
+            event.type == pygame.MOUSEBUTTONDOWN
+            and event.button == 1
+            and self.view.menu_open
+        ):
+            if not any(
+                menu.contains_pointer(event.pos)
+                for menu in self.view.dropdowns.values()
+                if menu.is_open
+            ):
+                self.view.dismiss_menus()
+                return
+        consumed = self.view.process_event(event)
+        if event.type == pygame_gui.UI_DROP_DOWN_MENU_CHANGED:
+            self._handle_selection(event)
+        elif event.type == pygame_gui.UI_BUTTON_PRESSED:
+            for name, widget in self.view.widgets.items():
+                if event.ui_element is widget:
+                    button = self._controls()[name]
+                    if button.visible and button.enabled and not self.view.menu_open:
+                        button.callback()
+                    break
+        elif event.type == pygame.KEYDOWN and not consumed and not self.view.menu_open:
             self._handle_key(event.key)
-        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            self._handle_click(event.pos)
 
-    def _handle_path_event(self, event: pygame.event.Event) -> None:
-        if event.type == pygame.TEXTINPUT:
-            self.path_input += event.text
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
-                self._close_path_input()
-            elif event.key == pygame.K_BACKSPACE:
-                self.path_input = self.path_input[:-1]
-            elif event.key == pygame.K_RETURN and self.path_input.strip():
-                self.open_level(self.path_input.strip())
+    def _handle_selection(self, event: pygame.event.Event) -> None:
+        value = getattr(event, "selected_option_id", event.text)
+        menus = self.view.dropdowns
+        if event.ui_element is menus["stage"]:
+            self.load_stage(int(value))
+        elif event.ui_element is menus["mode"]:
+            self.set_mode(value)
+        elif event.ui_element is menus["heuristic"]:
+            self.set_heuristic(value)
+        elif event.ui_element is menus["speed"]:
+            self.set_playback_speed(float(value))
 
     def _handle_key(self, key: int) -> None:
-        if self.mode_menu_open:
-            if key == pygame.K_ESCAPE:
-                self.mode_menu_open = False
-            return
         if key in KEY_ACTIONS:
             self.play(KEY_ACTIONS[key])
-            return
-        if command := self._key_commands.get(key):
+        elif command := self._key_commands.get(key):
             command()
 
-    def _handle_click(self, position: tuple[int, int]) -> None:
-        pos = self.view.canvas_position(self.screen, position)
-        if pos is None:
-            return
-        for name, button in reversed(self._controls().items()):
-            if self.mode_menu_open and name != "mode" and not name.startswith("mode_"):
-                continue
-            if button.visible and button.enabled and button.rect.collidepoint(pos):
-                button.callback()
-                return
-        self.mode_menu_open = False
-
     def _controls(self) -> dict[str, Button]:
-        """Refresh only availability, including between events in the same frame."""
-        for action in ROLLS:
-            self.buttons[action.value].enabled = self.can_play
-        self.buttons["swap"].enabled = self.can_play and isinstance(
-            self.session.state.block, SplitBlock
-        )
+        solver = self.mode in SOLVERS
+        playback = solver and bool(self._solution or self._solution_animation)
+        self.buttons["next"].visible = self.can_advance
         self.buttons["next"].enabled = self.can_advance
-        self.buttons["mode"].label = f"{self.mode}  v"
-        for name, button in self.buttons.items():
-            if name.startswith("mode_"):
-                button.visible = self.mode_menu_open
-        self.buttons["solve"].visible = self.mode in SOLVERS
+        self.buttons["solve"].visible = solver
         self.buttons["solve"].enabled = self.can_solve
-        self.buttons["solve"].label = (
-            "Searching..."
-            if self._search_future is not None
-            else "Playing..."
-            if self._solution or (self.mode in SOLVERS and self.animation.is_animating)
-            else "Solve"
+        self.buttons["solve"].label = "Searching…" if self._search_future else "Solve"
+        self.buttons["playback"].visible = playback
+        self.buttons["playback"].label = "Pause" if self.autoplay else "Resume"
+        self.buttons["playback"].enabled = bool(self._solution)
+        self.buttons["step"].visible = playback
+        self.buttons["step"].enabled = (
+            bool(self._solution) and not self.autoplay and not self.animation.is_animating
         )
         return self.buttons
 
-    def draw(self) -> None:
-        self.view.draw(
-            self.screen,
-            session=self.session,
-            selected_level=self.levels[self.selected_index],
-            selected_index=self.selected_index,
-            level_count=len(self.levels),
-            board=self.board,
-            buttons=list(self._controls().values()),
-            path_input=self.path_input,
-            error=self.error,
+    def _sync_view(self) -> None:
+        self.view.configure(
+            self.levels, self.active_index, self.mode,
+            self.heuristic_name, self.playback_speed,
         )
+        self.view.sync_buttons(self._controls())
+
+    def draw(self) -> None:
+        self._sync_view()
+        self.view.draw(self.screen, board=self.board)
 
     def update(self, elapsed_ms: float) -> None:
-        self.animation.update(elapsed_ms)
-        self._update_solution()
+        speed = self.playback_speed if self._solution_animation else 1.0
+        self.animation.update(elapsed_ms * speed)
+        if not self.animation.is_animating:
+            self._solution_animation = False
+        if self.session.status is not SessionStatus.PLAYING:
+            if not self.animation.is_animating and not self.view.result_open:
+                if self.session.status is SessionStatus.LOST:
+                    self._cancel_solution()
+                else:
+                    self._solution.clear()
+                self.view.show_result(
+                    won=self.session.status is SessionStatus.WON,
+                    can_advance=self.can_advance,
+                )
+        else:
+            self._update_solution()
+        self._sync_view()
+        self.view.update(elapsed_ms)
 
     def run(self) -> int:
         clock = pygame.time.Clock()
@@ -354,4 +421,3 @@ class GameApp:
         self._cancel_solution()
         self._executor.shutdown(wait=False, cancel_futures=True)
         self.animation.cancel_animation()
-        self._close_path_input()
