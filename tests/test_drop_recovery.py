@@ -117,30 +117,32 @@ def test_drop_restores_bridges_and_split_cubes(game, stage_routes, level_index):
     assert game.session.status is SessionStatus.PLAYING
 
 
-def test_loss_in_playback_discards_the_remaining_route(game, monkeypatch):
+def test_invalid_solver_route_is_rejected_without_mutating_the_board(game, monkeypatch):
     future = Future()
     future.set_result(SearchResult(["up", "right"], 0, 0, 0, 2))
     monkeypatch.setattr(game._executor, "submit", lambda *args: future)
     game.set_mode("BFS")
+    original = game.session.state
     game.solve()
     game.update(0)
-    assert game.session.status is SessionStatus.LOST
-    assert game._solution
-    game.update(2000)
+    assert game.session.status is SessionStatus.PLAYING
+    assert game.session.state == original
     assert not game._solution and game.last_result is None
     assert game.solution_total == game.solution_completed == 0
-    assert not game.can_solve
-    assert game.view.result_open
-    press_result(game, "restart")
     assert game.can_solve
-    game.update(2000)
-    assert game.session.action_count == 0
+    assert not game.view.result_open
+    assert game.view.status.text == "Error"
+    assert "invalid solution" in game.error
+    game.restart()
+    game.update(0)
+    assert game.view.status.text == "Idle"
 
 
-def test_removed_title_status_instructions_and_json_controls_stay_removed(game):
-    assert set(game.view.labels) == {"stage", "mode", "heuristic", "speed"}
-    assert set(game.view.widgets) == {"solve", "restart", "next", "playback", "step"}
-    assert not hasattr(game.view, "status")
+def test_native_controls_have_status_and_keep_json_loading_removed(game):
+    assert set(game.view.labels) == {"stage", "mode", "heuristic"}
+    assert set(game.view.widgets) == {"solve", "restart", "next", "playback", "step",
+                                      "start", "back", "end", "cancel", "prev_stage", "next_stage"}
+    assert game.view.status.text == "Idle"
     assert not hasattr(game.view, "open_button")
     start, level_count = game.session.state, len(game.levels)
     game.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_o))
@@ -159,7 +161,7 @@ def test_resize_and_mode_changes_keep_controls_at_the_top(game):
     game.update(0)
     sidebar = game.view.sidebar
     assert sidebar.scrollable_container.rect.top == sidebar.rect.top
-    assert game.view.labels["stage"].rect.top == sidebar.rect.top + 8
+    assert game.view.labels["stage"].rect.top == game.view.cards["stage"].rect.top + 16
 
 
 @pytest.mark.parametrize("size", [(800, 600), (1160, 800), (2320, 1600)])
@@ -202,3 +204,37 @@ def test_win_popup_actions_and_final_stage(game, stage_routes, final):
     assert not game.view.result_open
     assert game.can_play
     assert game.active_index == (len(game.levels) - 1 if final else 1)
+
+
+@pytest.mark.parametrize("speed", [0.5, 1.0, 4.0])
+def test_solver_win_popup_waits_for_final_animation(game, stage_routes, speed):
+    from bloxorz_solver.ui.playback import Playback, build_snapshots
+
+    game.set_mode("BFS")
+    game.set_playback_speed(speed)
+    actions_by_letter = dict(U=Action.UP, D=Action.DOWN, L=Action.LEFT,
+                             R=Action.RIGHT, X=Action.SWAP_ACTIVE_CUBE)
+    actions = tuple(actions_by_letter[letter]
+                    for letter in stage_routes[game.session.level.id])
+    game.playback = Playback(game.session, game.animation, actions,
+                             build_snapshots(game.session, actions))
+    game.update(0)
+    for _ in actions[:-1]:
+        game.update(2000 / speed)
+        assert not game.view.result_open
+    assert game.session.status is SessionStatus.WON
+    game.update((ROLL_MS + FALL_MS - 1) / speed)
+    assert not game.view.result_open
+    game.playback.pause()
+    game.update(5000)
+    assert not game.view.result_open
+    game.playback.play()
+    game.update(2 / speed)
+    assert game.view.result_title == "You win!"
+    window = game.view.result_window
+    game.update(5000)
+    assert game.view.result_window is window
+    press_result(game, "next")
+    assert game.active_index == 1
+    assert not game.view.result_open
+    assert game.session.status is SessionStatus.PLAYING

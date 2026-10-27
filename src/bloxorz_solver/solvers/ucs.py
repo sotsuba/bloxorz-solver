@@ -56,15 +56,17 @@ class UCSSolver(BaseSolver):
         expanded = 0
 
         while frontier:
+            self.check_cancelled()
             current_cost, _, state = heapq.heappop(frontier)
             # A cheaper route may have replaced this entry since it was queued.
             if current_cost != best_cost[state]:
                 continue
             if self.is_goal(state):
-                return self.reconstruct_path(parents, state), expanded
+                return self.reconstruct_path(parents, state, cancel_event=self._cancel_event), expanded
 
             expanded += 1
             for transition in self.problem.get_successors(state):
+                self.check_cancelled()
                 if not isfinite(transition.cost) or transition.cost < 0:
                     raise ValueError("UCS requires finite, nonnegative transition costs")
                 edge_cost = self._transition_cost(transition)

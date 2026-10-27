@@ -1,8 +1,13 @@
-# Bộ dữ liệu benchmark
+# Benchmark corpus
 
-`v1/manifest.json` quản lý 360 màn giải được và 20 màn vô nghiệm, cùng chứng nhận, seed,
-phân tập, thống kê pilot và lý do loại ứng viên. Các tệp trong `v1/levels/` mở được bằng
-ứng dụng Bloxorz hiện tại (`bloxorz-solver --level <file>`).
+`v1/manifest.json` indexes 360 solvable and 20 unsolvable levels, with seeds,
+certificates, partitions, and generation statistics. Level files are in `v1/levels/`.
 
-Corpus v1 là dữ liệu cố định. Sinh phiên bản mới vào thư mục khác; không sửa các màn
-hoặc chia lại tập sau khi đã dùng để đánh giá. Xem [hướng dẫn](../docs/benchmark.md).
+Open a level with:
+
+```sh
+uv run bloxorz-solver --level benchmarks/v1/levels/unsolvable-000.json
+```
+
+Keep the v1 corpus and partitions fixed for reproducible comparisons. Generate new
+corpora in a separate directory. See the [benchmark guide](../docs/benchmark.md).

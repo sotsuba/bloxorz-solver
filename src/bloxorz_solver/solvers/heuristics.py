@@ -9,9 +9,11 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from importlib import import_module
 from math import hypot
+from threading import Event
 
 from bloxorz_solver.game.rules import ROLL_TABLE, occupied_cells
 from bloxorz_solver.game.state import GameState, NormalBlock, Orientation, SwitchKind
+from bloxorz_solver.solvers.base import check_cancelled
 from bloxorz_solver.solvers.problem import BloxorzProblem
 
 Heuristic = Callable[[Hashable], float]
@@ -52,7 +54,7 @@ def euclidean(problem: BloxorzProblem) -> Heuristic:
     return estimate
 
 
-def relaxed_board(problem: BloxorzProblem) -> Heuristic:
+def relaxed_board(problem: BloxorzProblem, *, cancel_event: Event | None = None) -> Heuristic:
     """Reverse roll distances with open bridges and unbreakable fragile floor.
 
     Until the first split, every real roll is an edge in this relaxed graph.
@@ -70,12 +72,14 @@ def relaxed_board(problem: BloxorzProblem) -> Heuristic:
     } | set(level.bridge_at)
     poses = set()
     for row, col in floor:
+        check_cancelled(cancel_event)
         for orientation in Orientation:
             block = NormalBlock(row, col, orientation)
             if all(cell in floor for cell in occupied_cells(block)):
                 poses.add(block)
     reverse = defaultdict(list)
     for block in poses:
+        check_cancelled(cancel_event)
         for dr, dc, orientation in ROLL_TABLE[block.orientation].values():
             successor = NormalBlock(block.row + dr, block.col + dc, orientation)
             if successor in poses:
@@ -86,6 +90,7 @@ def relaxed_board(problem: BloxorzProblem) -> Heuristic:
     distances = {NormalBlock(p.row, p.col): 0 for p in targets}
     queue = deque(distances)
     while queue:
+        check_cancelled(cancel_event)
         current = queue.popleft()
         for previous in reverse[current]:
             if previous not in distances:
@@ -143,8 +148,14 @@ def resolve_heuristic(name: str) -> HeuristicFactory:
     return factory
 
 
-def create_heuristic(name: str, problem: BloxorzProblem) -> Heuristic:
-    heuristic = resolve_heuristic(name)(problem)
+def create_heuristic(
+    name: str, problem: BloxorzProblem, *, cancel_event: Event | None = None,
+) -> Heuristic:
+    check_cancelled(cancel_event)
+    factory = resolve_heuristic(name)
+    heuristic = (relaxed_board(problem, cancel_event=cancel_event)
+                 if factory is relaxed_board else factory(problem))
+    check_cancelled(cancel_event)
     if not callable(heuristic):
         raise ValueError(f"Heuristic factory {name!r} must return a callable")
     return heuristic

@@ -1,10 +1,11 @@
 """Pygame application: manual play, background search, and solution playback."""
 
-from collections import deque
 from collections.abc import Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from copy import copy
 from dataclasses import dataclass
 from functools import partial
+from threading import Event, Lock
 from time import perf_counter
 
 import pygame
@@ -14,7 +15,7 @@ from bloxorz_solver.game.session import GameSession, SessionStatus
 from bloxorz_solver.game.state import Action, GameState, Level, Outcome
 from bloxorz_solver.levels.loader import builtin_levels
 from bloxorz_solver.solvers.astar import AStarSolver
-from bloxorz_solver.solvers.base import SearchResult
+from bloxorz_solver.solvers.base import SearchCancelled, SearchResult, check_cancelled
 from bloxorz_solver.solvers.bfs import BFSSolver
 from bloxorz_solver.solvers.dfs import DFSSolver
 from bloxorz_solver.solvers.heuristics import DEFAULT_HEURISTIC, HEURISTICS, create_heuristic
@@ -22,6 +23,7 @@ from bloxorz_solver.solvers.problem import BloxorzProblem
 from bloxorz_solver.solvers.ucs import UCSSolver
 from bloxorz_solver.ui.animation import BoardAnimation
 from bloxorz_solver.ui.board import Board
+from bloxorz_solver.ui.playback import Playback, SessionSnapshot, build_snapshots
 from bloxorz_solver.ui.view import (
     CANVAS_SIZE,
     MIN_WINDOW_SIZE,
@@ -37,20 +39,33 @@ SOLVERS = {"BFS": BFSSolver, "DFS": DFSSolver, "UCS": UCSSolver, "A*": AStarSolv
 @dataclass
 class UISearchResult(SearchResult):
     initialization_time: float = 0.0
+    snapshots: tuple[SessionSnapshot, ...] = ()
+    actions: tuple[Action, ...] = ()
 
 
-def solve_position(level: Level, state: GameState, mode: str, heuristic: str) -> UISearchResult:
-    """Build the problem and heuristic in the worker, using captured UI values."""
+def solve_position(level: Level, state: GameState, mode: str, heuristic: str,
+                   cancel_event: Event | None = None,
+                   session: GameSession | None = None) -> UISearchResult:
+    """Build search inputs and reversible snapshots entirely in the worker."""
+    check_cancelled(cancel_event)
     started = perf_counter()
     problem = BloxorzProblem(level)
     solver = (
-        AStarSolver(problem, create_heuristic(heuristic, problem))
+        AStarSolver(problem, create_heuristic(heuristic, problem, cancel_event=cancel_event))
         if mode == "A*"
         else SOLVERS[mode](problem)
     )
     initialization_time = perf_counter() - started
-    result = solver.solve(state)
-    return UISearchResult(**vars(result), initialization_time=initialization_time)
+    result = solver.solve(state, cancel_event=cancel_event)
+    if session is None:
+        session = GameSession(level)
+        session.state = state
+    snapshots = (build_snapshots(session, result.path, cancel_event)
+                 if result.is_found else ())
+    check_cancelled(cancel_event)
+    return UISearchResult(**vars(result), initialization_time=initialization_time,
+                          snapshots=snapshots,
+                          actions=tuple(Action(action) for action in (result.path or ())))
 
 
 KEY_ACTIONS = {
@@ -94,13 +109,20 @@ class GameApp:
         self.last_result: SearchResult | None = None
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._search_future: Future[SearchResult] | None = None
-        self._solution: deque[Action] = deque()
+        self.playback: Playback | None = None
+        self._cancel_event: Event | None = None
+        self._request_id = 0
+        self._result_lock = Lock()
+        self._completed_searches = {}
+        self.search_status = "Idle"
         callbacks = {
             "restart": self.restart,
             "next": self.next_stage,
             "solve": self.solve,
             "playback": self.toggle_playback,
-            "step": self.step_solution,
+            "cancel": self.cancel_search,
+            "prev_stage": partial(self.select_level, -1),
+            "next_stage": partial(self.select_level, 1),
         }
         self.buttons = create_buttons(callbacks)
         self.view.bind_buttons(self.buttons)
@@ -129,7 +151,7 @@ class GameApp:
             and self.session.status is SessionStatus.PLAYING
             and not self.animation.is_animating
             and self._search_future is None
-            and not self._solution
+            and self.playback is None
         )
 
     @property
@@ -178,17 +200,62 @@ class GameApp:
         self.mode = mode
         self.error = ""
 
+    @property
+    def autoplay(self):
+        return self.playback.playing if getattr(self, "playback", None) else self._autoplay
+
+    @autoplay.setter
+    def autoplay(self, value):
+        self._autoplay = value
+        if getattr(self, "playback", None):
+            self.playback.playing = value
+
+    @property
+    def _solution(self):
+        """Remaining actions, retained for callers inspecting playback progress."""
+        return self.playback.actions[self.playback.index:] if self.playback else ()
+
     def solve(self) -> None:
-        """Find a route from the current position without blocking Pygame events."""
         if not self.can_solve:
             return
         self.error = ""
         self.last_result = None
         self.solution_total = self.solution_completed = 0
-        self.autoplay = True
+        self._request_id += 1
+        request_id = self._request_id
+        event = self._cancel_event = Event()
+        captured = copy(self.session)
+        self.search_status = "Searching…"
         self._search_future = self._executor.submit(
-            solve_position, self.session.level, self.session.state, self.mode, self.heuristic_name
+            solve_position, captured.level, captured.state, self.mode, self.heuristic_name,
+            event, captured,
         )
+        self._search_future.add_done_callback(
+            partial(self._publish_search, request_id, event, captured)
+        )
+
+    def _publish_search(self, request_id, event, captured, future):
+        """A worker callback publishes plain data; it never calls Pygame."""
+        result, snapshots, actions, error = None, (), (), None
+        try:
+            result = future.result()
+            snapshots = getattr(result, "snapshots", ())
+            actions = getattr(result, "actions", ())
+            if result.is_found and not snapshots:
+                snapshots = build_snapshots(captured, result.path, event)
+            if result.is_found and not actions:
+                actions = tuple(Action(action) for action in result.path)
+        except Exception as exc:
+            error = exc
+        with self._result_lock:
+            if not event.is_set():
+                self._completed_searches[request_id] = (result, snapshots, actions, error)
+
+    def cancel_search(self):
+        if self._search_future is not None:
+            self._cancel_solution()
+            self.error = ""
+            self.search_status = "Cancelled"
 
     def set_heuristic(self, name: str) -> None:
         if name not in HEURISTICS:
@@ -204,55 +271,72 @@ class GameApp:
         self.playback_speed = speed
 
     def toggle_playback(self) -> None:
-        if self._solution:
-            self.autoplay = not self.autoplay
+        if self.playback:
+            if self.playback.playing:
+                self.playback.pause()
+            else:
+                self.playback.play()
+            self._sync_progress()
 
-    def _take_solution_step(self) -> None:
-        self._apply_action(self._solution.popleft())
-        self.solution_completed += 1
-        self._solution_animation = self.animation.is_animating
+    def _sync_progress(self):
+        self.solution_total = len(self.playback.actions) if self.playback else 0
+        self.solution_completed = self.playback.index if self.playback else 0
+        self._solution_animation = bool(self.playback and self.animation.is_animating)
 
     def step_solution(self) -> None:
-        if (
-            self._solution
-            and not self.autoplay
-            and not self.animation.is_animating
-            and not self.view.menu_open
-        ):
-            self._take_solution_step()
+        self.seek_relative(1)
+
+    def seek_relative(self, delta):
+        if self.playback:
+            self.seek_solution(self.playback.index + delta)
+
+    def seek_solution(self, index):
+        if self.playback and not self.view.menu_open:
+            self.view.clear_result()
+            self.playback.seek(index)
+            self._sync_progress()
+            self._sync_view()
+
+    def jump_to_end(self):
+        if self.playback:
+            self.seek_solution(len(self.playback.actions))
 
     def _cancel_solution(self) -> None:
-        """Cancel queued work and discard results tied to the old mode or stage."""
+        if self._cancel_event is not None:
+            self._cancel_event.set()
         if self._search_future is not None:
             self._search_future.cancel()
             self._search_future = None
-        self._solution.clear()
-        self.solution_total = self.solution_completed = 0
+        with self._result_lock:
+            self._completed_searches.clear()
+        self.playback = None
+        self._autoplay = True
+        self._sync_progress()
         self.last_result = None
+        self.search_status = "Idle"
 
     def _update_solution(self) -> None:
-        """Collect a completed search and play one action after each animation."""
-        if self._search_future is not None and self._search_future.done():
-            future, self._search_future = self._search_future, None
-            try:
-                result = future.result()
-                self.last_result = result
-                if result.path is None:
-                    self.error = "No solution from this position."
-                    self.view.show_notice("No solution found")
-                else:
-                    self._solution.extend(Action(action) for action in result.path)
-                    self.solution_total = len(result.path)
-            except Exception as exc:
-                self.error = f"Search failed: {exc}"
-                self.view.show_notice("Search failed")
-        if (
-            self._solution
-            and self.autoplay
-            and not self.animation.is_animating
-            and not self.view.menu_open
-        ):
-            self._take_solution_step()
+        with self._result_lock:
+            completed = self._completed_searches.pop(self._request_id, None)
+        if completed is None:
+            return
+        self._search_future = None
+        result, snapshots, actions, error = completed
+        if isinstance(error, (CancelledError, SearchCancelled)):
+            self.search_status = "Cancelled"
+        elif error:
+            self.error = f"Search failed: {error}"
+            self.search_status = "Error"
+            self.view.show_notice("Search failed")
+        else:
+            self.last_result = result
+            if not result.is_found:
+                self.error = "No solution from this position."
+                self.search_status = "No solution"
+                self.view.show_notice("No solution found")
+            else:
+                self.search_status = "Solved"
+                self.playback = Playback(self.session, self.animation, actions, snapshots)
 
     def restart(self) -> None:
         self.view.clear_result()
@@ -264,7 +348,9 @@ class GameApp:
         self.error = ""
 
     def select_level(self, offset: int) -> None:
-        self.load_stage((self.active_index + offset) % len(self.levels))
+        index = self.active_index + offset
+        if 0 <= index < len(self.levels):
+            self.load_stage(index)
 
     def load_stage(self, index: int) -> None:
         self.view.clear_result()
@@ -285,9 +371,17 @@ class GameApp:
         if event.type == pygame.QUIT:
             self.close()
             return
-        if event.type == pygame.VIDEORESIZE:
-            size = (max(MIN_WINDOW_SIZE[0], event.w), max(MIN_WINDOW_SIZE[1], event.h))
-            self.screen = pygame.display.set_mode(size, pygame.RESIZABLE)
+        if event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED, pygame.WINDOWSIZECHANGED):
+            width = event.dict.get("w", event.dict.get("x", self.view.size[0]))
+            height = event.dict.get("h", event.dict.get("y", self.view.size[1]))
+            size = (max(MIN_WINDOW_SIZE[0], width), max(MIN_WINDOW_SIZE[1], height))
+            current = pygame.display.get_surface()
+            if size == self.view.size and current.get_size() == size:
+                return
+            # SDL may already have resized the display surface. Reuse it so a
+            # native maximize does not unnecessarily recreate the window.
+            self.screen = (current if current.get_size() == size else
+                           pygame.display.set_mode(size, pygame.RESIZABLE))
             self.view.resize(size)
             return
         if self.view.result_open:
@@ -341,8 +435,6 @@ class GameApp:
             self.set_mode(value)
         elif event.ui_element is menus["heuristic"]:
             self.set_heuristic(value)
-        elif event.ui_element is menus["speed"]:
-            self.set_playback_speed(float(value))
 
     def _handle_key(self, key: int) -> None:
         if key in KEY_ACTIONS:
@@ -352,49 +444,51 @@ class GameApp:
 
     def _controls(self) -> dict[str, Button]:
         solver = self.mode in SOLVERS
-        playback = solver and bool(self._solution or self._solution_animation)
+        playback = solver and self.playback is not None
         self.buttons["next"].visible = self.can_advance
         self.buttons["next"].enabled = self.can_advance
+        self.buttons["prev_stage"].enabled = self.active_index > 0
+        self.buttons["next_stage"].enabled = self.active_index + 1 < len(self.levels)
         self.buttons["solve"].visible = solver
         self.buttons["solve"].enabled = self.can_solve
         self.buttons["solve"].label = "Searching…" if self._search_future else "Solve"
-        self.buttons["playback"].visible = playback
-        self.buttons["playback"].label = "Pause" if self.autoplay else "Resume"
-        self.buttons["playback"].enabled = bool(self._solution)
-        self.buttons["step"].visible = playback
-        self.buttons["step"].enabled = (
-            bool(self._solution) and not self.autoplay and not self.animation.is_animating
-        )
+        self.buttons["cancel"].visible = self._search_future is not None
+        self.buttons["cancel"].enabled = self._search_future is not None
+        for name in ("playback",):
+            self.buttons[name].visible = playback
+            self.buttons[name].enabled = playback and bool(self.playback.actions)
+        self.buttons["playback"].label = "⏸" if playback and self.autoplay else "⏯"
         return self.buttons
 
     def _sync_view(self) -> None:
         self.view.configure(
             self.levels, self.active_index, self.mode,
-            self.heuristic_name, self.playback_speed,
+            self.heuristic_name,
         )
         self.view.sync_buttons(self._controls())
+        self.view.sync_metrics(self.last_result)
+        status = "Solved" if self.session.status is SessionStatus.WON else self.search_status
+        if self.view.status.text != status:
+            self.view.status.set_text(status)
 
     def draw(self) -> None:
         self._sync_view()
         self.view.draw(self.screen, board=self.board)
 
     def update(self, elapsed_ms: float) -> None:
-        speed = self.playback_speed if self._solution_animation else 1.0
-        self.animation.update(elapsed_ms * speed)
-        if not self.animation.is_animating:
-            self._solution_animation = False
-        if self.session.status is not SessionStatus.PLAYING:
-            if not self.animation.is_animating and not self.view.result_open:
-                if self.session.status is SessionStatus.LOST:
-                    self._cancel_solution()
-                else:
-                    self._solution.clear()
-                self.view.show_result(
-                    won=self.session.status is SessionStatus.WON,
-                    can_advance=self.can_advance,
-                )
+        elapsed_ms = max(0, elapsed_ms)
+        self.animation.visual_time = getattr(self.animation, "visual_time", 0) + elapsed_ms / 1000
+        self._update_solution()
+        if self.playback:
+            if not self.view.menu_open:
+                self.playback.update(elapsed_ms / 1000, self.playback_speed)
+            self._sync_progress()
         else:
-            self._update_solution()
+            self.animation.update(elapsed_ms)
+        if (self.session.status is not SessionStatus.PLAYING and
+                not self.animation.is_animating and not self.view.result_open):
+            self.view.show_result(won=self.session.status is SessionStatus.WON,
+                                  can_advance=self.can_advance)
         self._sync_view()
         self.view.update(elapsed_ms)
 

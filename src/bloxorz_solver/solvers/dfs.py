@@ -24,7 +24,9 @@ class DFSSolver(BaseSolver):
         expanded = 1
 
         while iterators:
+            self.check_cancelled()
             for transition in iterators[-1]:
+                self.check_cancelled()
                 next_state = transition.next_state
                 if next_state in visited:
                     continue

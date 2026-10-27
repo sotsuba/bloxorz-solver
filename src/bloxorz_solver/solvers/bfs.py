@@ -15,12 +15,14 @@ class BFSSolver(BaseSolver):
 
         # BFS algorithm loop
         while frontier:
+            self.check_cancelled()
             state = frontier.popleft()
             if self.is_goal(state):
-                return self.reconstruct_path(parents, state), expanded
+                return self.reconstruct_path(parents, state, cancel_event=self._cancel_event), expanded
 
             expanded += 1
             for transition in self.problem.get_successors(state):
+                self.check_cancelled()
                 next_state = transition.next_state
                 if next_state not in visited:
                     visited.add(next_state)
