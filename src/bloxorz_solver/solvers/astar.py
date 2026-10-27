@@ -43,14 +43,16 @@ class AStarSolver(BaseSolver):
         expanded = 0
 
         while frontier:
+            self.check_cancelled()
             _, _, cost, state = heappop(frontier)
             if cost != best_cost[state]:
                 continue
             if self.is_goal(state):
-                return self.reconstruct_path(parents, state), expanded
+                return self.reconstruct_path(parents, state, cancel_event=self._cancel_event), expanded
 
             expanded += 1
             for edge in self.problem.get_successors(state):
+                self.check_cancelled()
                 if not isfinite(edge.cost) or edge.cost < 0:
                     raise ValueError("A* requires finite, nonnegative transition costs")
                 next_cost = cost + edge.cost

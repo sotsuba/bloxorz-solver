@@ -450,7 +450,7 @@ def test_search_failure_is_reported_and_solve_can_be_retried(app, monkeypatch):
 def test_solve_dispatches_to_the_selected_algorithm(app, monkeypatch, mode, solver_type):
     submitted = []
 
-    def search(solver, state):
+    def search(solver, state, *, cancel_event=None):
         submitted.append((solver, state))
         return SearchResult([], 0, 0, 0, 0)
 
@@ -485,7 +485,7 @@ def test_switching_algorithm_discards_the_old_search_result(app, monkeypatch, mo
     assert app.session.action_count == 0
 
 
-def test_heuristic_selector_and_step_playback(app):
+def test_heuristic_selector_and_playback(app):
     app.set_mode("A*")
     app.draw()
     assert app.view.dropdowns["heuristic"].visible
@@ -500,12 +500,10 @@ def test_heuristic_selector_and_step_playback(app):
     app.toggle_playback()
     app.update(2000)
     assert not app.autoplay
-    assert app.view.widgets["playback"].text == "Resume"
-    for count in range(1, len(result.path)):
-        click(app, "step")
-        assert app.session.action_count == count + 1
+    assert app.view.widgets["playback"].text == "⏯"
+    click(app, "playback")
+    for _ in result.path:
         app.update(2000)
-        assert app.session.action_count == count + 1
     assert app.session.status is SessionStatus.WON
     app.draw()
 
@@ -544,9 +542,9 @@ def test_ui_constructs_heuristic_inside_background_job_from_captured_values(app,
 
     original = module.create_heuristic
 
-    def create(name, problem):
+    def create(name, problem, **kwargs):
         factories.append((name, problem.level))
-        return original(name, problem)
+        return original(name, problem, **kwargs)
 
     monkeypatch.setattr(app._executor, "submit", submit)
     monkeypatch.setattr(module, "create_heuristic", create)
@@ -556,6 +554,12 @@ def test_ui_constructs_heuristic_inside_background_job_from_captured_values(app,
     assert not factories  # No preprocessing on the event thread.
     app.set_heuristic("zero")
     function, args = jobs[0]
+    # The abandoned request observes cancellation before preprocessing.
+    from bloxorz_solver.solvers.base import SearchCancelled
+    with pytest.raises(SearchCancelled):
+        function(*args)
+    # Captured values are independent of subsequent UI choices.
+    args[4].clear()
     assert function(*args).path
     assert factories == [("relaxed_board", app.session.level)]
 
@@ -579,19 +583,14 @@ def ready_route(app, monkeypatch, route=None):
     return route
 
 
-def test_pause_step_and_resume_keep_progress_without_duplicate_actions(app, monkeypatch):
+def test_pause_and_resume_keep_progress_without_duplicate_actions(app, monkeypatch):
     ready_route(app, monkeypatch)
     assert app.solution_total == 4 and app.solution_completed == 1
     click(app, "playback")
     assert not app.autoplay
-    assert not app._controls()["step"].enabled
     app.update(2000)
     assert app.session.action_count == 1
-    assert app.view.widgets["playback"].text == "Resume"
-    click(app, "step")
-    assert app.solution_completed == 2 and app.session.action_count == 2
-    app.update(2000)
-    assert app.session.action_count == 2
+    assert app.view.widgets["playback"].text == "⏯"
     click(app, "playback")
     for _ in range(4):
         app.update(2000)
@@ -604,8 +603,7 @@ def test_pause_step_and_resume_keep_progress_without_duplicate_actions(app, monk
 @pytest.mark.parametrize("speed", [0.5, 1.0, 2.0, 4.0])
 def test_speed_changes_solution_animation_but_not_manual_moves(app, monkeypatch, speed):
     ready_route(app, monkeypatch)
-    app.toggle_playback()
-    choose(app, "speed", str(speed))
+    app.set_playback_speed(speed)
     app.update(ROLL_MS / (2 * speed))
     assert app.animation.elapsed_ms == pytest.approx(ROLL_MS / 2)
     app.restart()
@@ -672,7 +670,7 @@ def test_terminal_actions_wait_for_animation_and_remain_reachable(app):
     click(app, "next")
     assert app.active_index == 1 and app.can_play
 
-def test_search_only_updates_solve_button_without_status_panel(app, monkeypatch):
+def test_search_updates_solve_button_and_status(app, monkeypatch):
     future = Future()
     monkeypatch.setattr(app._executor, "submit", lambda *args: future)
     app.set_mode("BFS")
@@ -681,4 +679,4 @@ def test_search_only_updates_solve_button_without_status_panel(app, monkeypatch)
     app.draw()
     assert app.view.widgets["solve"].text == "Searching…"
     assert not app.view.widgets["solve"].is_enabled
-    assert not hasattr(app.view, "status")
+    assert app.view.status.text == "Searching…"

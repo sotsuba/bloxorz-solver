@@ -6,9 +6,17 @@ from pathlib import Path
 
 import pygame
 import pygame_gui
-from pygame_gui.elements import UIButton, UIDropDownMenu, UILabel, UIScrollingContainer, UIWindow
+from pygame_gui.elements import (
+    UIButton,
+    UIDropDownMenu,
+    UILabel,
+    UIPanel,
+    UIScrollingContainer,
+    UIWindow,
+)
 
 from bloxorz_solver.game.state import Level
+from bloxorz_solver.solvers.base import SearchResult
 from bloxorz_solver.solvers.heuristics import HEURISTICS
 from bloxorz_solver.ui.board import Board
 
@@ -21,7 +29,8 @@ NOTICE_FADE_MS = 800
 MODES = ("Manual", "BFS", "DFS", "UCS", "A*")
 BUTTON_LABELS = {
     "solve": "Solve", "restart": "Restart", "next": "Next",
-    "playback": "Pause", "step": "Step",
+    "playback": "⏯",
+    "cancel": "Cancel", "prev_stage": "‹", "next_stage": "›",
 }
 
 
@@ -90,13 +99,22 @@ class GameView:
         self.control_scale = 1.0
         self.sidebar_width = SIDEBAR_WIDTH
         self.canvas = pygame.Surface(self.size)
+        self._preloaded_scales = set()
         self.manager = pygame_gui.UIManager(
             self.size, theme_path=Path(__file__).with_name("theme.json")
         )
+        self.manager.add_font_paths("transport_symbols", str(
+            Path(__file__).with_name("fonts") / "NotoSansSymbols2-Regular.ttf"))
+        self._preload_fonts(1.0)
         self.sidebar = UIScrollingContainer(
             pygame.Rect(0, 0, SIDEBAR_WIDTH, 600), self.manager,
             allow_scroll_x=False, should_grow_automatically=False, object_id="#sidebar",
         )
+        self.cards = {
+            name: UIPanel(pygame.Rect(0, 0, 280, 100), starting_height=0,
+                          manager=self.manager, container=self.sidebar, object_id="#card")
+            for name in ("stage", "controls", "metrics")
+        }
         self.widgets: dict[str, UIButton] = {}
         self.dropdowns: dict[str, Dropdown] = {}
         self.result_window = None
@@ -112,11 +130,26 @@ class GameView:
         self._next = False
         self._layout_key = None
         self.labels = {}
+        self._notice_fonts = {}
+        self.status = UILabel(pygame.Rect(0, 0, 260, 28), "Idle", self.manager,
+                              container=self.sidebar, object_id="#status")
+        self.metric_labels = {
+            name: UILabel(pygame.Rect(0, 0, 260, 26), text,
+                          self.manager, container=self.sidebar,
+                          object_id="#heading" if name == "title" else "#metric_value")
+            for name, text in (
+                ("title", "Search metrics"),
+                ("search_time", "Search time: —"),
+                ("peak_memory", "Peak memory: —"),
+                ("expanded_nodes", "Expanded nodes: —"),
+                ("solution_length", "Solution length: —"),
+            )
+        }
         for name, title in (("stage", "Stage"),
-                            ("mode", "Control mode"), ("heuristic", "A* heuristic"),
-                            ("speed", "Playback speed")):
+                            ("mode", "Algorithm"), ("heuristic", "A* heuristic")):
             self.labels[name] = UILabel(pygame.Rect(0, 0, 260, 26), title,
-                                       self.manager, container=self.sidebar)
+                                       self.manager, container=self.sidebar,
+                                       object_id="#heading" if name in ("stage", "mode") else "#label")
         self.resize(self.size)
 
     @property
@@ -132,7 +165,7 @@ class GameView:
             "You win!" if can_advance else "All stages complete!"
         ) if won else "You lose!"
         scale = self.control_scale
-        width, height = round(420 * scale), round(190 * scale)
+        width, height = round(600 * scale), round(230 * scale)
         rect = pygame.Rect(0, 0, width, height)
         rect.center = (self.size[0] // 2, self.size[1] // 2)
         self.result_window = UIWindow(
@@ -141,8 +174,11 @@ class GameView:
         self.result_window.set_blocking(True)
         container = self.result_window.get_container()
         inner_width = container.get_size()[0]
-        UILabel(pygame.Rect(0, round(20 * scale), inner_width, round(42 * scale)),
-                self.result_title, self.manager, container=container)
+        padding = round(24 * scale)
+        UILabel(pygame.Rect(padding, round(20 * scale),
+                            inner_width - 2 * padding, round(90 * scale)),
+                self.result_title, self.manager, container=container,
+                object_id="#result_title_win" if won else "#result_title_lose")
         actions = [("restart", "Replay" if won else "Retry")]
         if won and can_advance:
             actions.insert(0, ("next", "Next Stage"))
@@ -150,7 +186,7 @@ class GameView:
         button_width = (inner_width - gap * (len(actions) + 1)) // len(actions)
         self.result_buttons = {
             name: UIButton(
-                pygame.Rect(gap + index * (button_width + gap), round(90 * scale),
+                pygame.Rect(gap + index * (button_width + gap), round(140 * scale),
                             button_width, round(40 * scale)),
                 label, self.manager, container=container,
             )
@@ -172,6 +208,10 @@ class GameView:
             )
             for name, button in buttons.items()
         }
+        tips = {"playback": "Play / pause", "cancel": "Cancel search",
+                "prev_stage": "Previous stage", "next_stage": "Next stage"}
+        for name, tip in tips.items():
+            self.widgets[name].set_tooltip(tip)
 
     def _dropdown(self, name, options, selected):
         if name in self.dropdowns:
@@ -184,7 +224,7 @@ class GameView:
 
     def configure(
         self, levels: Sequence[Level], active_index: int,
-        mode: str, heuristic: str, speed: float,
+        mode: str, heuristic: str,
     ) -> None:
         options = [(f"{i + 1:02d}  {level.name}", str(i)) for i, level in enumerate(levels)]
         if options != self._stage_options:
@@ -196,14 +236,9 @@ class GameView:
                 "heuristic", [(h.label, h.name) for h in HEURISTICS.values()],
                 (HEURISTICS[heuristic].label, heuristic),
             )
-            self._dropdown(
-                "speed", [(f"{v:g}×", str(v)) for v in PLAYBACK_SPEEDS],
-                (f"{speed:g}×", str(speed)),
-            )
         self._select("stage", options[active_index])
         self._select("mode", (mode, mode))
         self._select("heuristic", (HEURISTICS[heuristic].label, heuristic))
-        self._select("speed", (f"{speed:g}×", str(speed)))
         if mode != self._mode:
             self.dismiss_menus()
         self._mode = mode
@@ -231,52 +266,128 @@ class GameView:
         self._next = buttons["next"].visible
         self._layout_controls()
 
+    def sync_metrics(self, result: SearchResult | None) -> None:
+        """Display the latest search without rebuilding widgets each frame."""
+        values = dict.fromkeys(
+            ("search_time", "peak_memory", "expanded_nodes", "solution_length"), "—"
+        )
+        if result is not None:
+            seconds = result.search_time
+            values["search_time"] = f"{seconds * 1000:,.2f} ms"
+            memory = result.peak_memory
+            values["peak_memory"] = f"{memory / 1_000_000:,.3f} MB"
+            values["expanded_nodes"] = f"{result.expanded_nodes:,}"
+            if result.is_found:
+                values["solution_length"] = f"{result.solution_length:,}"
+        for name, value in values.items():
+            title = name.replace("_", " ").capitalize()
+            text = f"{title}: {value}"
+            if self.metric_labels[name].text != text:
+                self.metric_labels[name].set_text(text)
+
     def _layout_controls(self):
         key = (self.size, self._mode, self._playback, self._next,
-               tuple(self.dropdowns))
+               tuple(self.dropdowns), tuple((name, bool(w.visible))
+                                           for name, w in self.widgets.items()))
         if key == self._layout_key:
             return
         self._layout_key = key
         scale = self.control_scale
-        gap, row = round(8 * scale), round(36 * scale)
-        width = self.sidebar.rect.width - round(28 * scale)
-        y = gap
+        gap, row, padding, separation = (round(v * scale) for v in (6, 36, 16, 20))
+        outer = round(6 * scale)
+        card_width = self.sidebar.rect.width - 20 - 2 * outer
+        x = outer + padding
+        width = card_width - 2 * padding
+        y = outer
+
+        def size_widget(widget, dimensions):
+            changed = widget.relative_rect.size != dimensions
+            widget.set_dimensions(dimensions)
+            if changed and isinstance(widget, UIButton):
+                # pygame_gui's rapid resize can retain old surfaces for inactive
+                # states. Rebuild so disabling a button uses its current size.
+                widget.rebuild()
 
         def place(widget, height=row):
             nonlocal y
-            widget.set_relative_position((gap, y))
-            widget.set_dimensions((width, height))
+            widget.set_relative_position((x, y))
+            size_widget(widget, (width, height))
             y += height + gap
 
-        if "next" in self.widgets and self.widgets["next"].visible:
-            place(self.widgets["next"])
-        for name in ("stage", "mode", "heuristic", "speed"):
-            visible = name in self.dropdowns and (name != "heuristic" or self._mode == "A*")
-            visible = visible and (name != "speed" or self._mode != "Manual")
+        def begin(name):
+            nonlocal y
+            self.cards[name].show()
+            start = y
+            y += padding
+            return start
+
+        def finish(name, start):
+            nonlocal y
+            y += padding - gap
+            card = self.cards[name]
+            card.set_relative_position((outer, start))
+            card.set_dimensions((card_width, y - start))
+            y += separation
+
+        def selector(name, visible, heading=True):
             self._visible(self.labels[name], visible)
             if name in self.dropdowns:
                 self._visible(self.dropdowns[name], visible)
-            if visible:
-                place(self.labels[name], round(22 * scale))
-                place(self.dropdowns[name])
-        if "solve" in self.widgets and self.widgets["solve"].visible:
-            place(self.widgets["solve"])
-        transport = [self.widgets[name] for name in ("playback", "step", "restart")
-                     if name in self.widgets and self.widgets[name].visible]
-        if transport:
-            button_width = (width - gap * (len(transport) - 1)) // len(transport)
-            for index, widget in enumerate(transport):
-                widget.set_relative_position((gap + index * (button_width + gap), y))
-                widget.set_dimensions((button_width, row))
-            y += row + gap
-        # Keep dropdown options inside the container's clipping area even when
-        # the compact controls use less height than the viewport.
+                if visible:
+                    if heading:
+                        place(self.labels[name], round(24 * scale))
+                    place(self.dropdowns[name])
+
+        start = begin("stage")
+        selector("stage", "stage" in self.dropdowns)
+        if "stage" in self.dropdowns and "prev_stage" in self.widgets:
+            stage = self.dropdowns["stage"]
+            arrow = round(28 * scale)
+            stage.set_relative_position((x + arrow + gap, stage.relative_rect.y))
+            stage.set_dimensions((width - 2*(arrow+gap), row))
+            for name, left in (("prev_stage", x), ("next_stage", x+width-arrow)):
+                self.widgets[name].set_relative_position((left, stage.relative_rect.y))
+                size_widget(self.widgets[name], (arrow, row))
+        if "next" in self.widgets and self.widgets["next"].visible:
+            place(self.widgets["next"])
+        finish("stage", start)
+
+        start = begin("controls")
+        selector("mode", "mode" in self.dropdowns)
+        selector("heuristic", self._mode == "A*")
+        for name in ("solve", "cancel"):
+            if name in self.widgets and self.widgets[name].visible:
+                place(self.widgets[name])
+        if "restart" in self.widgets:
+            place(self.widgets["restart"])
+        place(self.status, round(28 * scale))
+
+        solver = self._mode != "Manual"
+        if solver:
+            transport = [self.widgets[name] for name in ("playback",)
+                         if name in self.widgets and self.widgets[name].visible]
+            if transport:
+                button_width = (width - gap * (len(transport) - 1)) // len(transport)
+                for index, widget in enumerate(transport):
+                    widget.set_relative_position((x + index * (button_width + gap), y))
+                    size_widget(widget, (button_width, row))
+                y += row + gap
+        finish("controls", start)
+
+        self._visible(self.cards["metrics"], solver)
+        for label in self.metric_labels.values():
+            self._visible(label, solver)
+        if solver:
+            start = begin("metrics")
+            for label in self.metric_labels.values():
+                place(label, round(26 * scale))
+            finish("metrics", start)
+
         self.sidebar.scrollable_container.set_relative_position((0, 0))
         self.sidebar.set_scrollable_area_dimensions(
             (self.sidebar.rect.width - 20, max(y, self.sidebar.rect.height))
         )
-        if self.sidebar.vert_scroll_bar is not None:
-            self.sidebar.vert_scroll_bar.set_scroll_from_start_percentage(0)
+        # Preserve scroll position across search/status changes. Resize starts at the top.
 
     @property
     def menu_open(self) -> bool:
@@ -286,16 +397,38 @@ class GameView:
         for menu in self.dropdowns.values():
             menu.dismiss()
 
+    def _preload_fonts(self, scale):
+        if scale in self._preloaded_scales:
+            return
+        fonts = self.manager.get_theme().get_font_dictionary()
+        requests = []
+        for name, size, style in (("noto_sans", 15, "regular"),
+                                  ("noto_sans", 15, "bold"),
+                                  ("noto_sans", 48, "bold"),
+                                  ("noto_sans", 18, "regular"),
+                                  ("fira_code_symbols", 15, "regular"),
+                                  ("transport_symbols", 18, "regular")):
+            size = round(size * scale)
+            font_id = fonts.create_font_id(size, name, style == "bold", False, True)
+            if font_id not in fonts.loaded_fonts:
+                requests.append({"name": name, "point_size": size, "style": style})
+        self.manager.preload_fonts(requests)
+        self._preloaded_scales.add(scale)
+
     def resize(self, size: tuple[int, int]) -> None:
         self.dismiss_menus()
         self.size = size
         self.control_scale = max(1.0, min(size[0] / CANVAS_SIZE[0], size[1] / CANVAS_SIZE[1]))
         scale = self.control_scale
+        notice_size = round(24 * scale)
+        if notice_size not in self._notice_fonts:
+            self._notice_fonts[notice_size] = pygame.font.Font(None, notice_size)
         for menu in self.dropdowns.values():
             menu.expansion_height_limit = round(360 * scale)
         self.sidebar_width = round(SIDEBAR_WIDTH * scale)
         self.canvas = pygame.Surface(size)
         self.manager.set_window_resolution(size)
+        self._preload_fonts(scale)
         font = {"name": "noto_sans", "size": str(round(15 * scale))}
         selectors = (
             "defaults", "button", "label",
@@ -304,28 +437,42 @@ class GameView:
             "tool_tip.text_box",
         )
         updates = {selector: {"font": font.copy()} for selector in selectors}
+        for outcome in ("win", "lose"):
+            updates[f"#result_title_{outcome}"] = {
+                "font": {**font, "size": str(round(48 * scale)), "bold": "1"},
+            }
+        for name in ("playback", "prev_stage", "next_stage"):
+            updates[f"#{name}"] = {"font": {"name": ("transport_symbols" if name in
+                                                       ("playback",)
+                                                       else "noto_sans"),
+                                             "size": str(round(18 * scale))},
+                                   "misc": {"text_horiz_alignment_padding": "0"}}
         for selector in ("drop_down_menu.#expand_button", "vertical_scroll_bar.button",
                          "horizontal_scroll_bar.button"):
             updates[selector] = {"font": {"name": "fira_code_symbols",
                                           "size": str(round(15 * scale))}}
+        for selector, weight in (("#metric_value", "0"), ("#heading", "1")):
+            updates[selector] = {"font": {**font, "bold": weight}}
         updates["button"]["misc"] = {"text_horiz_alignment_padding": str(round(12 * scale))}
         updates["selection_list"]["misc"] = {"list_item_height": str(round(48 * scale))}
         updates["tool_tip.text_box"]["misc"] = {"padding": f"{round(8*scale)},{round(6*scale)}"}
-        for label in self.labels.values():
+        for label in (*self.labels.values(), *self.metric_labels.values(), self.status):
             label.set_dimensions((round(280 * scale), round(34 * scale)))
         theme = self.manager.get_theme()
         theme.load_theme(updates)
         self.manager.rebuild_all_from_changed_theme_data(theme)
         margin = round(16 * scale)
-        self.sidebar_width = round(310 * scale)
+        self.sidebar_width = round(340 * scale)
         self.panel_rect = pygame.Rect(margin, margin, self.sidebar_width, size[1] - margin * 2)
         self.board_rect = pygame.Rect(
             self.panel_rect.right + margin, margin,
             size[0] - self.panel_rect.right - margin * 2, size[1] - margin * 2,
         )
         self._background = pygame.Surface(size)
-        self._background.fill("#101820")
-        pygame.draw.rect(self._background, "#182331", self.panel_rect, border_radius=6)
+        self._background.fill("#F4F9FF")
+        pygame.draw.rect(self._background, "#FFFFFF", self.panel_rect, border_radius=12)
+        pygame.draw.rect(self._background, "#D6E6FF", self.panel_rect, width=1,
+                         border_radius=12)
         self.board_surface = pygame.Surface(self.board_rect.size, pygame.SRCALPHA)
         self.sidebar.set_relative_position(self.panel_rect.topleft)
         self.sidebar.set_dimensions(self.panel_rect.size)
@@ -352,12 +499,12 @@ class GameView:
         self._notice_surface = None
         if not self.notice_text:
             return
-        font = pygame.font.Font(None, round(24 * self.control_scale))
-        text = font.render(self.notice_text, True, "#F5E9D3")
+        font = self._notice_fonts[round(24 * self.control_scale)]
+        text = font.render(self.notice_text, True, "#1F2A44")
         padding = round(12 * self.control_scale)
         size = (text.get_width() + padding * 2, text.get_height() + padding * 2)
         self._notice_surface = pygame.Surface(size, pygame.SRCALPHA)
-        pygame.draw.rect(self._notice_surface, "#29343E", self._notice_surface.get_rect(),
+        pygame.draw.rect(self._notice_surface, "#FFFFFF", self._notice_surface.get_rect(),
                          border_radius=6)
         self._notice_surface.blit(text, (padding, padding))
 

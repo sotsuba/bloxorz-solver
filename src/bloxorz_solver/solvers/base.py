@@ -3,8 +3,18 @@ import tracemalloc
 from abc import ABC, abstractmethod
 from collections.abc import Hashable
 from dataclasses import dataclass
+from threading import Event
 
 from bloxorz_solver.solvers.contracts import SearchProblem
+
+
+class SearchCancelled(Exception):
+    """Cooperative cancellation, distinct from an exhausted search."""
+
+
+def check_cancelled(event: Event | None) -> None:
+    if event is not None and event.is_set():
+        raise SearchCancelled()
 
 
 @dataclass
@@ -27,12 +37,15 @@ class BaseSolver(ABC):
 
     def __init__(self, problem: SearchProblem):
         self.problem = problem
+        self._cancel_event: Event | None = None
 
-    def solve(self, initial_state: Hashable) -> SearchResult:
+    def solve(self, initial_state: Hashable, *, cancel_event: Event | None = None) -> SearchResult:
         """Collect metrics, preserving tracing started by the caller.
 
         With existing tracing, peak_memory includes that session's earlier peak.
         """
+        self._cancel_event = cancel_event
+        self.check_cancelled()
         owns_tracing = not tracemalloc.is_tracing()
         if owns_tracing:
             tracemalloc.start()
@@ -40,6 +53,7 @@ class BaseSolver(ABC):
 
         try:
             path, expanded = self._search(initial_state)
+            self.check_cancelled()
             elapsed = time.perf_counter() - start_time
             _, peak = tracemalloc.get_traced_memory()
         finally:
@@ -64,16 +78,21 @@ class BaseSolver(ABC):
         """
         pass
 
+    def check_cancelled(self) -> None:
+        check_cancelled(self._cancel_event)
+
     def is_goal(self, state: Hashable) -> bool:
         return self.problem.is_goal(state)
 
     @staticmethod
-    def reconstruct_path(parents: dict, goal_state: Hashable) -> list[str]:
+    def reconstruct_path(parents: dict, goal_state: Hashable, *,
+                         cancel_event: Event | None = None) -> list[str]:
         """Reconstruct the action sequence from parent references."""
         path = []
         current = goal_state
 
         while current in parents:
+            check_cancelled(cancel_event)
             previous, action = parents[current]
             path.append(action)
             current = previous
