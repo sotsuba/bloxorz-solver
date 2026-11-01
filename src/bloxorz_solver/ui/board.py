@@ -43,8 +43,12 @@ class Board:
         self._block_layer = None
         self._below_layer = None
 
-    def _fit_view(self, rect: pygame.Rect) -> None:
-        self._view = fit_iso(self.animation.level, rect)
+    def _fit_view(self, rect: pygame.Rect, zoom_factor: float = 1.0) -> None:
+        scale, left, top = fit_iso(self.animation.level, rect)
+        scale *= zoom_factor
+        left = rect.centerx + (left - rect.centerx) * zoom_factor
+        top = rect.centery + (top - rect.centery) * zoom_factor
+        self._view = (scale, left, top)
 
     def _project(self, col: float, row: float, height: float = 0) -> tuple[float, float]:
         return to_screen(col, row, height, self._view)
@@ -58,11 +62,23 @@ class Board:
             pygame.draw.lines(surface, outline, True, projected,
                               max(1, round(self._view[0] * 0.025)))
 
-    def draw(self, surface: pygame.Surface) -> None:
+    def draw(self, surface: pygame.Surface, *, bad_apple=None) -> None:
         surface.fill((0, 0, 0, 0))
         if self.animation.level is None:
             return
         level, size = self.animation.level, surface.get_size()
+
+        # Handle bad apple cinematic view and tile animation
+        is_bad_apple = bool(bad_apple and bad_apple.state.active)
+        zoom = 1.0
+        if is_bad_apple:
+            # Cinematic zoom out: from 1.0 (normal) down to 0.72 (revealing full Caro grid)
+            p = bad_apple.state.zoom_progress
+            zoom = 1.0 - 0.28 * (p * p * (3 - 2 * p))  # smoothstep ease
+            self._fit_view(surface.get_rect(), zoom_factor=zoom)
+            self._draw_bad_apple_tiles(surface, bad_apple)
+            return
+
         if self._level is not level or self._size != size:
             self._level, self._size = level, size
             self._fit_view(surface.get_rect())
@@ -289,3 +305,38 @@ class Board:
                     continue
                 faces.append((depth(face), face, mesh, opacity))
         return sorted(faces, key=lambda item: item[0])
+
+    def _draw_bad_apple_tiles(self, surface: pygame.Surface, bad_apple) -> None:
+        """Render Bad Apple monochrome tile states on the Caro board with high performance."""
+        level = self.animation.level
+        matrix = bad_apple.get_frame_matrix()
+        # Sort tiles by depth so isometric ordering is always accurate
+        tiles = [
+            Position(r, c)
+            for r in range(level.height)
+            for c in range(level.width)
+        ]
+        tiles.sort(key=lambda pos: depth(((pos.col + 0.5, pos.row + 0.5, 0),)))
+
+        outline_width = max(1, round(self._view[0] * 0.025))
+        for pos in tiles:
+            is_white = 0
+            if pos.row < len(matrix) and pos.col < len(matrix[pos.row]):
+                is_white = matrix[pos.row][pos.col]
+
+            # White tile vs Dark void tile
+            color = (250, 250, 252) if is_white else (20, 22, 28)
+            outline = "#B0B8C0" if is_white else "#121418"
+
+            mesh = Mesh(
+                cuboid(
+                    pos.col + 0.012,
+                    pos.row + 0.012,
+                    0.976,
+                    0.976,
+                    FLOOR_DEPTH,
+                    base=-FLOOR_DEPTH,
+                )
+            )
+            for _, face, _, _ in self._visible_faces(((mesh, 1.0),), inset=0):
+                self._polygon(surface, face, shade(color, face), outline=outline)

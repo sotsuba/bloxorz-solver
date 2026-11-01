@@ -11,6 +11,7 @@ from time import perf_counter
 import pygame
 import pygame_gui
 
+from bloxorz_solver.bad_apple import BadApplePlayer, load_secret_level
 from bloxorz_solver.game.session import GameSession, SessionStatus
 from bloxorz_solver.game.state import Action, GameState, Level, Outcome
 from bloxorz_solver.levels.loader import builtin_levels
@@ -107,6 +108,8 @@ class GameApp:
         self.solution_completed = 0
         self._solution_animation = False
         self.last_result: SearchResult | None = None
+        self.bad_apple = BadApplePlayer()
+        self._secret_level = load_secret_level()
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._search_future: Future[SearchResult] | None = None
         self.playback: Playback | None = None
@@ -131,6 +134,7 @@ class GameApp:
             pygame.K_n: self.next_stage,
             pygame.K_PAGEUP: partial(self.select_level, -1),
             pygame.K_PAGEDOWN: partial(self.select_level, 1),
+            pygame.K_b: self.toggle_bad_apple,
         }
         self._display_session()
         self._sync_view()
@@ -357,6 +361,7 @@ class GameApp:
         self.view.show_notice("")
         self.view.dismiss_menus()
         self._cancel_solution()
+        self.bad_apple.stop()
         self.active_index = index
         self.session = GameSession(self.levels[index])
         self._display_session()
@@ -365,6 +370,31 @@ class GameApp:
     def next_stage(self) -> None:
         if self.can_advance:
             self.load_stage(self.active_index + 1)
+
+    def unlock_secret_stage(self) -> None:
+        """Unlock and load the secret Caro Bad Apple stage."""
+        if self._secret_level not in self.levels:
+            self.levels.append(self._secret_level)
+        secret_idx = self.levels.index(self._secret_level)
+        self.load_stage(secret_idx)
+        self.view.show_notice("Bonus Stage: Bad Apple!! Press 'B' to play")
+
+    def toggle_bad_apple(self) -> None:
+        """Toggle Bad Apple cinematic sequence if on the secret stage or triggered directly."""
+        current_level = self.session.level
+        # Automatically warp to secret stage if not already on it
+        if current_level.id != "11_bad_apple":
+            if self._secret_level not in self.levels:
+                self.levels.append(self._secret_level)
+            secret_idx = self.levels.index(self._secret_level)
+            self.load_stage(secret_idx)
+
+        toggled = self.bad_apple.toggle()
+        if toggled:
+            self._cancel_solution()
+            self.view.show_notice("Bad Apple!! (Press 'B' or 'Esc' to exit)")
+        else:
+            self.view.show_notice("")
 
     def handle_event(self, event: pygame.event.Event) -> None:
         self._sync_view()
@@ -396,8 +426,17 @@ class GameApp:
                     self.restart()
                 elif event.key == pygame.K_n:
                     self.next_stage()
+            # If the user completed the final campaign stage (stage 10), unlock bonus stage upon restart/dismiss
+            if (self.session.status is SessionStatus.WON
+                    and self.session.level.id == "10_the_long_way_home"
+                    and not self.view.result_open
+                    and self._secret_level not in self.levels):
+                self.levels.append(self._secret_level)
             return
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            if self.bad_apple.state.active:
+                self.bad_apple.stop()
+                return
             self.view.dismiss_menus()
             return
         # A click outside an expanded menu dismisses it without activating controls below.
@@ -473,11 +512,12 @@ class GameApp:
 
     def draw(self) -> None:
         self._sync_view()
-        self.view.draw(self.screen, board=self.board)
+        self.view.draw(self.screen, board=self.board, bad_apple=self.bad_apple)
 
     def update(self, elapsed_ms: float) -> None:
         elapsed_ms = max(0, elapsed_ms)
         self.animation.visual_time = getattr(self.animation, "visual_time", 0) + elapsed_ms / 1000
+        self.bad_apple.update(elapsed_ms / 1000)
         self._update_solution()
         if self.playback:
             if not self.view.menu_open:

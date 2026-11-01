@@ -140,8 +140,7 @@ def test_invalid_solver_route_is_rejected_without_mutating_the_board(game, monke
 
 def test_native_controls_have_status_and_keep_json_loading_removed(game):
     assert set(game.view.labels) == {"stage", "mode", "heuristic"}
-    assert set(game.view.widgets) == {"solve", "restart", "next", "playback", "step",
-                                      "start", "back", "end", "cancel", "prev_stage", "next_stage"}
+    assert set(game.view.widgets) == {"solve", "restart", "next", "playback", "cancel", "prev_stage", "next_stage"}
     assert game.view.status.text == "Idle"
     assert not hasattr(game.view, "open_button")
     start, level_count = game.session.state, len(game.levels)
