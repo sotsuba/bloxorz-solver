@@ -524,7 +524,19 @@ class GameView:
                 self.notice_text = ""
                 self._notice_surface = None
 
-    def draw(self, screen: pygame.Surface, *, board: Board):
+    def draw(self, screen: pygame.Surface, *, board: Board, bad_apple=None):
+        is_bad_apple = bool(bad_apple and bad_apple.state.active)
+        if is_bad_apple:
+            # Fullscreen black background for Bad Apple theater mode
+            self.canvas.fill((10, 10, 14))
+            board.draw(self.board_surface, bad_apple=bad_apple)
+            # Center the board surface across the full canvas
+            board_dest = self.board_surface.get_rect(center=self.canvas.get_rect().center)
+            self.canvas.blit(self.board_surface, board_dest)
+            screen.blit(self.canvas, (0, 0))
+            pygame.display.flip()
+            return
+
         self.canvas.blit(self._background, (0, 0))
         board.draw(self.board_surface)
         self.canvas.blit(self.board_surface, self.board_rect)
