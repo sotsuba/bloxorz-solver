@@ -1,6 +1,10 @@
 # Bloxorz Solver
 
-Bloxorz with a Pygame interface, BFS, DFS, UCS, A*, and a reproducible benchmark suite.
+Bloxorz with a Pygame interface, BFS, DFS, U
+
+https://github.com/user-attachments/assets/9bc4db6e-eeba-4aff-ac7c-3e4dbef4f034
+
+CS, A*, and a reproducible benchmark suite.
 
 ## Run
 
